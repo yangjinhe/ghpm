@@ -31,6 +31,7 @@ type Request struct {
 	Version    string
 	AssetName  string
 	AssetURL   string
+	Headers    map[string]string
 	SHA256     string
 	DataDir    string
 	BinDir     string
@@ -107,6 +108,7 @@ func Install(ctx context.Context, fetcher *download.Fetcher, req Request) (res R
 		Proxy:          req.Proxy,
 		UserAgent:      req.UserAgent,
 		Progress:       req.Progress,
+		Headers:        req.Headers,
 		ExpectedSHA256: req.SHA256,
 	})
 	if err != nil {

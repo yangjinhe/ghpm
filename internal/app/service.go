@@ -311,6 +311,7 @@ func (s *Service) InstallOne(ctx context.Context, id string, opts InstallOptions
 		res.Previous = rec.Version
 	}
 
+	assetURL, assetHeaders := s.GH.DownloadSource(asset)
 	opts.Progress.emit(Event{Kind: "install", ID: id, Message: fmt.Sprintf("installing %s %s", app.Repo, tag)})
 	ir, err := installer.Install(ctx, s.Fetcher, installer.Request{
 		App:       *app,
@@ -318,7 +319,8 @@ func (s *Service) InstallOne(ctx context.Context, id string, opts InstallOptions
 		Tag:       tag,
 		Version:   ver,
 		AssetName: asset.Name,
-		AssetURL:  asset.URL,
+		AssetURL:  assetURL,
+		Headers:   assetHeaders,
 		SHA256:    sha,
 		DataDir:   s.DataDir,
 		BinDir:    s.BinDir,
@@ -405,9 +407,11 @@ func (s *Service) checksumFor(ctx context.Context, rel *gh.Release, asset gh.Ass
 	if data, err := os.ReadFile(dest); err == nil && len(data) > 0 {
 		text = data
 	} else {
+		csURL, csHeaders := s.GH.DownloadSource(csAsset)
 		if _, err := s.Fetcher.Fetch(ctx, download.Options{
-			URL:       csAsset.URL,
+			URL:       csURL,
 			Dest:      dest,
+			Headers:   csHeaders,
 			Prefix:    s.Cfg.Defaults.GitHub.DownloadPrefix,
 			Proxy:     s.proxy(),
 			UserAgent: "ghpm/" + version.String(),

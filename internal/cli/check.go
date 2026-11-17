@@ -22,7 +22,8 @@ type checkJSON struct {
 }
 
 func newCheckCmd() *cobra.Command {
-	return &cobra.Command{
+	var notify bool
+	cmd := &cobra.Command{
 		Use:   "check [id...]",
 		Short: "Check GitHub for newer releases",
 		Long:  "Fetches the latest release of every configured app (or the named ones) and records available updates.",
@@ -96,10 +97,25 @@ func newCheckCmd() *cobra.Command {
 			if !flags.json {
 				fmt.Fprintf(cmd.OutOrStdout(), "\n%d app(s) checked, %d update(s) available\n", len(results), updates)
 			}
+			if notify {
+				var updates []string
+				for _, r := range results {
+					if r.UpdateAvailable && !r.Pinned && r.Err == nil {
+						updates = append(updates, r.ID)
+					}
+				}
+				if len(updates) > 0 {
+					if err := notifyUpdates(updates); err != nil {
+						fmt.Fprintf(cmd.ErrOrStderr(), "warning: %v\n", err)
+					}
+				}
+			}
 			if failed > 0 {
 				return app.CheckErrors(results)
 			}
 			return nil
 		},
 	}
+	cmd.Flags().BoolVar(&notify, "notify", false, "send a desktop notification when updates are available")
+	return cmd
 }

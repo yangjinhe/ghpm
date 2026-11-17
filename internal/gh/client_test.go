@@ -94,3 +94,24 @@ func TestPrereleaseSelection(t *testing.T) {
 		t.Errorf("tag = %q", rel.TagName)
 	}
 }
+
+func TestDownloadSource(t *testing.T) {
+	t.Setenv("GHPM_TOKEN", "secret")
+	c, err := New(config.GitHub{APIBase: "https://api.github.com", TokenEnv: "GHPM_TOKEN"}, "", "", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := Asset{URL: "https://github.com/x", APIURL: "https://api.github.com/assets/1"}
+	url, headers := c.DownloadSource(a)
+	if url != a.APIURL || headers["Authorization"] != "Bearer secret" || headers["Accept"] != "application/octet-stream" {
+		t.Errorf("authenticated source = %q %v", url, headers)
+	}
+
+	t.Setenv("GHPM_TOKEN", "")
+	t.Setenv("GH_TOKEN", "")
+	c2, _ := New(config.GitHub{APIBase: "https://api.github.com", TokenEnv: "GHPM_TOKEN"}, "", "", 0)
+	url, headers = c2.DownloadSource(a)
+	if url != a.URL || headers != nil {
+		t.Errorf("anonymous source = %q %v", url, headers)
+	}
+}

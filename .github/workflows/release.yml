@@ -1,0 +1,51 @@
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+          - goos: linux
+            goarch: arm64
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Build and package
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          set -eu
+          version="${GITHUB_REF_NAME#v}"
+          commit="$(git rev-parse --short HEAD)"
+          name="ghpm_${version}_${GOOS}_${GOARCH}"
+          mkdir -p "dist/${name}/examples"
+          CGO_ENABLED=0 go build -trimpath \
+            -ldflags "-s -w -X ghpm/internal/version.Version=${version} -X ghpm/internal/version.Commit=${commit}" \
+            -o "dist/${name}/ghpm" ./cmd/ghpm
+          cp README.md "dist/${name}/"
+          cp examples/config.yaml "dist/${name}/examples/"
+          tar -czf "dist/${name}.tar.gz" -C dist "${name}"
+          ( cd dist && sha256sum "${name}.tar.gz" > "${name}.tar.gz.sha256" )
+      - name: Publish release assets
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/*.tar.gz
+            dist/*.sha256
+          generate_release_notes: true
+          fail_on_unmatched_files: true

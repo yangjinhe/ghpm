@@ -27,11 +27,27 @@ var UserAgent = "ghpm/dev"
 
 // Asset is one downloadable release file.
 type Asset struct {
+	ID          int64  `json:"id"`
 	Name        string `json:"name"`
 	Size        int64  `json:"size"`
 	URL         string `json:"browser_download_url"`
+	APIURL      string `json:"url"`
 	Digest      string `json:"digest"`
 	ContentType string `json:"content_type"`
+}
+
+// DownloadSource returns the URL and headers to use for an asset. With a
+// token, the API asset endpoint is used so private repositories work; the
+// authorization header is dropped automatically by net/http on cross-host
+// redirects to the signed storage URL.
+func (c *Client) DownloadSource(a Asset) (string, map[string]string) {
+	if c.token != "" && a.APIURL != "" {
+		return a.APIURL, map[string]string{
+			"Accept":        "application/octet-stream",
+			"Authorization": "Bearer " + c.token,
+		}
+	}
+	return a.URL, nil
 }
 
 // Release is the subset of the release API ghpm cares about.
@@ -284,7 +300,11 @@ func (c *Client) getJSON(ctx context.Context, u string, out any) error {
 			}
 			return fmt.Errorf("unexpected 304 for %s", u)
 		case http.StatusNotFound:
-			return fmt.Errorf("not found: %s (check owner/repo and that the release exists)", u)
+			hint := "check owner/repo and that the release exists"
+			if c.token == "" {
+				hint += "; private repositories need GITHUB_TOKEN"
+			}
+			return fmt.Errorf("not found: %s (%s)", u, hint)
 		case http.StatusUnauthorized, http.StatusForbidden, http.StatusTooManyRequests:
 			return c.limitError(u)
 		case 500, 502, 503, 504:

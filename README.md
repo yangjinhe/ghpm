@@ -35,13 +35,14 @@
 - **版本保留与回滚**：默认保留 3 个版本，`ghpm rollback` 一条命令切回。
 - **更新检查**：ETag 条件请求（304 不计配额）、元数据缓存、并发检查、
   限流感知；支持固定版本（pin）。
+- **私有仓库**：设置 `GITHUB_TOKEN` 后，API 查询与资产下载都会携带鉴权。
 - **中文网络友好**：支持 `proxy` 配置（HTTP/SOCKS5）和下载镜像前缀
   （如 `https://ghfast.top`），镜像失败自动回退直连。
 - **TUI + CLI**：同一套核心逻辑，纯键盘操作。
 
 ## 构建
 
-需要 Go 1.21+（本项目用 1.23 开发）。
+需要 Go 1.25+（`go.mod` 已声明；旧版 Go 可通过 `GOTOOLCHAIN=auto` 自动下载）。
 
 ```bash
 cd /home/yangjh/aiproject
@@ -92,7 +93,7 @@ go build -o ghpm ./cmd/ghpm
 | `ghpm add <owner/repo\|url>` | 解析最新 release，生成资产映射并写入配置 |
 | `ghpm install [id...]` | 安装缺失的应用；`--all` 安装/升级全部 |
 | `ghpm list [--json]` | 已配置与已安装状态 |
-| `ghpm check [id...] [--json]` | 检查更新并缓存结果 |
+| `ghpm check [id...] [--json] [--notify]` | 检查更新；`--notify` 有更新时弹桌面通知 |
 | `ghpm update [id...] [--yes]` | 检查并升级；`--all` 不筛选直接升级全部 |
 | `ghpm rollback <id> [version]` | 切换到已安装的旧版本 |
 | `ghpm pin <id> [version] [--unpin]` | 固定版本/取消固定（固定后跳过更新） |
@@ -215,17 +216,38 @@ apps:
 
 ## 自动检查更新
 
-`ghpm check` 适合放进 cron 或 systemd user timer，例如每天 9 点：
+`ghpm check --notify` 在有更新时调用 `notify-send` 弹桌面通知，适合放进
+cron 或 systemd user timer。仓库内提供了可直接使用的模板：
 
-```cron
-0 9 * * *  GITHUB_TOKEN=xxx /home/you/.local/bin/ghpm check --json >> ~/.cache/ghpm/check.log
+```bash
+mkdir -p ~/.config/systemd/user
+cp contrib/systemd/ghpm-check.* ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now ghpm-check.timer
 ```
 
-配合通知脚本读取 `--json` 输出即可。TUI 启动时也会自动检查一次。
+token 放在 `~/.config/ghpm/env`（`GITHUB_TOKEN=...`，权限 600），服务会读取它。
+
+也可以只用 cron：
+
+```cron
+0 9 * * *  /home/you/.local/bin/ghpm check --notify --json >> ~/.cache/ghpm/check.log 2>&1
+```
+
+TUI 启动时也会自动检查一次。
+
+## Shell 补全
+
+```bash
+ghpm completion bash > ~/.local/share/bash-completion/completions/ghpm
+# 或 zsh / fish，见 `ghpm completion --help`
+```
 
 ## 安全说明
 
 - 默认用户级安装，**不会隐式 sudo**；`deb/rpm` 需要显式配置且会提示。
+- 私有仓库需要设置 `GITHUB_TOKEN`；资产通过 GitHub API 端点携带 token 下载，
+  重定向到对象存储时会自动去掉 Authorization 头。
 - SHA-256 校验失败会删除下载文件并中止，旧版本和软链保持不变。
 - 解包拒绝绝对路径、`..` 穿越和符号链接条目。
 - Token 只从环境变量读取，不写入配置或日志。
@@ -234,10 +256,21 @@ apps:
 
 ## 已知限制（v0.1）
 
-- 主要面向公开仓库；私有仓库的资产下载鉴权尚未实现（API 查询支持 token）。
 - 不做依赖解析、源码编译、GitHub Actions artifacts 安装。
 - 不自动配置 shell 补全/桌面文件；软链名默认取 app id，可用 `install.link` 调整。
 - macOS/Windows 的安装路径与包类型未做专门适配（核心逻辑可复用）。
+
+## 持续集成与发布
+
+- `.github/workflows/ci.yml`：每次推送/PR 运行 gofmt、vet、测试和 race 测试。
+- `.github/workflows/release.yml`：推送 `v*` 标签时自动交叉编译
+  linux/amd64、linux/arm64，打包并上传 tar.gz 与 sha256 到 Release。
+
+本地发布：
+
+```bash
+make build VERSION=0.1.1
+```
 
 ## 开发
 

@@ -461,6 +461,27 @@ func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			err := m.svc.SetPinned(id, pin)
 			return fmt.Sprintf("%s %s", id, mode), err
 		})
+	case "b":
+		v := m.current()
+		if v == nil {
+			return m, nil
+		}
+		if !v.Installed || v.State == nil || len(v.State.Versions) < 2 {
+			m.err = fmt.Errorf("%s has no earlier version installed", v.ID)
+			return m, nil
+		}
+		id := v.ID
+		m.confirmMsg = fmt.Sprintf("Roll %s back to the previous version?", id)
+		m.confirmCmd = func() tea.Cmd {
+			return m.actionCmd(func() (string, error) {
+				res, err := m.svc.Rollback(id, "")
+				if err != nil {
+					return "", err
+				}
+				return fmt.Sprintf("%s rolled back to %s", id, res.Version), nil
+			})
+		}
+		m.mode = modeConfirm
 	case "d":
 		v := m.current()
 		if v == nil {
@@ -711,7 +732,7 @@ func (m *model) footer() string {
 	}
 	keys := [][2]string{
 		{"space", "select"}, {"i", "install"}, {"u", "update"}, {"U", "update all"},
-		{"a", "add"}, {"p", "pin"}, {"d", "remove"}, {"enter", "details"},
+		{"a", "add"}, {"p", "pin"}, {"b", "rollback"}, {"d", "remove"}, {"enter", "details"},
 		{"c", "check"}, {"?", "help"}, {"q", "quit"},
 	}
 	var parts []string
@@ -781,6 +802,7 @@ func (m *model) viewHelp() string {
 		"U            update every app with a known update",
 		"a            add a repository",
 		"p            pin / unpin (skips updates)",
+		"b            roll back to the previous version",
 		"d            remove installed app",
 		"enter        show details",
 		"c / r        check for updates",

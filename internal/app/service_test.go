@@ -51,8 +51,21 @@ type fakeGitHub struct {
 	tag      string
 	version  string
 	withBad  bool
+	auth     bool
 	archives map[string][]byte
 	base     string
+}
+
+func (f *fakeGitHub) requireAuth() bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.auth
+}
+
+func (f *fakeGitHub) setAuth(v bool) {
+	f.mu.Lock()
+	f.auth = v
+	f.mu.Unlock()
 }
 
 func (f *fakeGitHub) setTag(tag, version string) {
@@ -68,22 +81,28 @@ func (f *fakeGitHub) release() map[string]any {
 	toolName := fmt.Sprintf("tool_%s_linux_amd64.tar.gz", ver)
 	assets := []map[string]any{
 		{
+			"id":                   1,
 			"name":                 toolName,
 			"size":                 len(f.archives[toolName]),
 			"browser_download_url": f.base + "/download/" + toolName,
+			"url":                  f.base + "/assets/" + toolName,
 		},
 	}
 	if f.withBad {
 		assets = append(assets, map[string]any{
+			"id":                   2,
 			"name":                 "bad_1.0.0_linux_amd64.tar.gz",
 			"size":                 len(f.archives["bad_1.0.0_linux_amd64.tar.gz"]),
 			"browser_download_url": f.base + "/download/bad_1.0.0_linux_amd64.tar.gz",
+			"url":                  f.base + "/assets/bad_1.0.0_linux_amd64.tar.gz",
 		})
 	}
 	assets = append(assets, map[string]any{
+		"id":                   3,
 		"name":                 "checksums.txt",
 		"size":                 200,
 		"browser_download_url": f.base + "/download/checksums.txt",
+		"url":                  f.base + "/assets/checksums.txt",
 	})
 	return map[string]any{
 		"tag_name": f.tag, "name": f.tag, "draft": false, "prerelease": false,
@@ -119,8 +138,11 @@ func newFakeGitHub(t *testing.T, withBad bool) (*fakeGitHub, func()) {
 	mux.HandleFunc("/repos/acme/tool/releases/tags/", func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(f.release())
 	})
-	mux.HandleFunc("/download/", func(w http.ResponseWriter, r *http.Request) {
-		name := strings.TrimPrefix(r.URL.Path, "/download/")
+	serve := func(w http.ResponseWriter, r *http.Request, name string) {
+		if f.requireAuth() && r.Header.Get("Authorization") != "Bearer test-token" {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
 		if name == "checksums.txt" {
 			_, _ = w.Write([]byte(f.checksums()))
 			return
@@ -133,6 +155,12 @@ func newFakeGitHub(t *testing.T, withBad bool) (*fakeGitHub, func()) {
 			return
 		}
 		_, _ = w.Write(data)
+	}
+	mux.HandleFunc("/download/", func(w http.ResponseWriter, r *http.Request) {
+		serve(w, r, strings.TrimPrefix(r.URL.Path, "/download/"))
+	})
+	mux.HandleFunc("/assets/", func(w http.ResponseWriter, r *http.Request) {
+		serve(w, r, strings.TrimPrefix(r.URL.Path, "/assets/"))
 	})
 	srv := httptest.NewServer(mux)
 	f.base = srv.URL
@@ -143,6 +171,8 @@ func testConfig(t *testing.T, apiBase string, apps ...config.App) (config.Paths,
 	t.Helper()
 	dir := t.TempDir()
 	t.Setenv("XDG_CACHE_HOME", filepath.Join(dir, "cache"))
+	t.Setenv("GITHUB_TOKEN", "")
+	t.Setenv("GH_TOKEN", "")
 	paths := config.DefaultPaths()
 	paths.ConfigFile = filepath.Join(dir, "config", "config.yaml")
 	paths.ConfigDir = filepath.Join(dir, "config")
@@ -349,5 +379,47 @@ func TestCompareVersions(t *testing.T) {
 		if got != c.newer {
 			t.Errorf("CompareVersions(%q,%q) = %v want %v", c.cur, c.latest, got, c.newer)
 		}
+	}
+}
+
+func TestPrivateRepoDownloadUsesToken(t *testing.T) {
+	f, closeSrv := newFakeGitHub(t, false)
+	defer closeSrv()
+	f.setAuth(true)
+	paths, _ := testConfig(t, f.base, toolApp())
+	t.Setenv("GITHUB_TOKEN", "test-token")
+	svc, err := New(Options{ConfigPath: paths.ConfigFile})
+	if err != nil {
+		t.Fatal(err)
+	}
+	res := svc.InstallOne(context.Background(), "tool", InstallOptions{})
+	if res.Err != nil {
+		t.Fatalf("private install: %v", res.Err)
+	}
+	if res.SHA256 != sha(f.archives["tool_1.0.0_linux_amd64.tar.gz"]) {
+		t.Errorf("sha = %q", res.SHA256)
+	}
+	if _, err := os.ReadFile(filepath.Join(paths.BinDir, "tool")); err != nil {
+		t.Errorf("binary not linked: %v", err)
+	}
+
+	// Without a token the download must fail rather than silently use the
+	// public URL, which the private server rejects.
+	if err := os.RemoveAll(paths.DataDir); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(svc.CacheDir); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(paths.BinDir, "tool")); err != nil && !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
+	t.Setenv("GITHUB_TOKEN", "")
+	svc2, err := New(Options{ConfigPath: paths.ConfigFile, NoCache: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res := svc2.InstallOne(context.Background(), "tool", InstallOptions{}); res.Err == nil {
+		t.Fatal("anonymous private install should fail")
 	}
 }

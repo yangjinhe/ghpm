@@ -45,6 +45,9 @@ type Options struct {
 	Progress  func(Progress)
 	// ExpectedSHA256, when non-empty, is verified; a mismatch removes Dest.
 	ExpectedSHA256 string
+	// Headers are added to the request (e.g. Authorization for private
+	// GitHub assets).
+	Headers map[string]string
 	// MaxRetries is the number of retries per URL (default 2).
 	MaxRetries int
 }
@@ -167,12 +170,23 @@ func (f *Fetcher) Fetch(ctx context.Context, opts Options) (string, error) {
 			if errors.Is(err, errChecksumMismatch) || errors.Is(err, context.Canceled) {
 				return "", err
 			}
+			var permanent *permanentError
+			if errors.As(err, &permanent) {
+				break // try the next candidate URL, not the same one again
+			}
 		}
 	}
 	return "", lastErr
 }
 
 var errChecksumMismatch = errors.New("checksum mismatch")
+
+// permanentError marks a failure that retrying the same URL will not fix,
+// such as 401/404.
+type permanentError struct{ err error }
+
+func (e *permanentError) Error() string { return e.err.Error() }
+func (e *permanentError) Unwrap() error { return e.err }
 
 func (f *Fetcher) fetchOne(ctx context.Context, u string, opts Options) (string, error) {
 	part := opts.Dest + ".part"
@@ -187,6 +201,9 @@ func (f *Fetcher) fetchOne(ctx context.Context, u string, opts Options) (string,
 	}
 	if opts.UserAgent != "" {
 		req.Header.Set("User-Agent", opts.UserAgent)
+	}
+	for k, v := range opts.Headers {
+		req.Header.Set(k, v)
 	}
 	if offset > 0 {
 		req.Header.Set("Range", fmt.Sprintf("bytes=%d-", offset))
@@ -207,7 +224,12 @@ func (f *Fetcher) fetchOne(ctx context.Context, u string, opts Options) (string,
 		_ = os.Remove(part)
 		return "", fmt.Errorf("resume failed for %s; retrying", u)
 	default:
-		return "", fmt.Errorf("download %s: HTTP %d", u, resp.StatusCode)
+		err := fmt.Errorf("download %s: HTTP %d", u, resp.StatusCode)
+		if resp.StatusCode >= 400 && resp.StatusCode < 500 &&
+			resp.StatusCode != http.StatusRequestTimeout && resp.StatusCode != http.StatusTooManyRequests {
+			return "", &permanentError{err: err}
+		}
+		return "", err
 	}
 
 	total := resp.ContentLength

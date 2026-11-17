@@ -1,0 +1,7 @@
+[Unit]
+Description=Check GitHub release updates with ghpm
+
+[Service]
+Type=oneshot
+EnvironmentFile=-%h/.config/ghpm/env
+ExecStart=%h/.local/bin/ghpm check --notify

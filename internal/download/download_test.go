@@ -137,3 +137,28 @@ func TestFetchPrefixFallback(t *testing.T) {
 		t.Errorf("content = %q", got)
 	}
 }
+
+func TestFetchSendsHeaders(t *testing.T) {
+	var got string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = r.Header.Get("Authorization")
+		if got != "Bearer token" {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		_, _ = w.Write([]byte("secret payload"))
+	}))
+	defer srv.Close()
+	f, _ := New("")
+	dest := filepath.Join(t.TempDir(), "p.bin")
+	_, err := f.Fetch(context.Background(), Options{
+		URL: srv.URL, Dest: dest,
+		Headers: map[string]string{"Authorization": "Bearer token"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "Bearer token" {
+		t.Errorf("header = %q", got)
+	}
+}
