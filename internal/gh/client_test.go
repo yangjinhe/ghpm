@@ -3,8 +3,10 @@ package gh
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -113,6 +115,90 @@ func TestDownloadSource(t *testing.T) {
 	url, headers = c2.DownloadSource(a)
 	if url != a.URL || headers != nil {
 		t.Errorf("anonymous source = %q %v", url, headers)
+	}
+}
+
+func TestLatestTagsGraphQL(t *testing.T) {
+	var requests int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/graphql" || r.Method != http.MethodPost {
+			http.NotFound(w, r)
+			return
+		}
+		if r.Header.Get("Authorization") != "Bearer gql-token" {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		atomic.AddInt32(&requests, 1)
+		var req struct{ Query string }
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Errorf("decode query: %v", err)
+			return
+		}
+		data := map[string]any{}
+		re := regexp.MustCompile(`r(\d+):repository\(owner:"([^"]+)",name:"([^"]+)"\)`)
+		for _, m := range re.FindAllStringSubmatch(req.Query, -1) {
+			name := m[2] + "/" + m[3]
+			if name == "acme/none" {
+				data["r"+m[1]] = map[string]any{"latestRelease": nil}
+				continue
+			}
+			data["r"+m[1]] = map[string]any{
+				"latestRelease": map[string]any{"tagName": "v2.0.0"},
+			}
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"data": data})
+	}))
+	defer srv.Close()
+
+	t.Setenv("GQL_TOKEN", "gql-token")
+	c, err := New(config.GitHub{APIBase: srv.URL, TokenEnv: "GQL_TOKEN"}, "", "", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var repos []string
+	for i := 0; i < 59; i++ {
+		repos = append(repos, fmt.Sprintf("acme/app%02d", i))
+	}
+	repos = append(repos, "acme/none")
+	tags, err := c.LatestTags(context.Background(), repos)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := atomic.LoadInt32(&requests); got != 2 {
+		t.Errorf("requests = %d, want 2 (60 repos, 50 per query)", got)
+	}
+	if len(tags) != 59 {
+		t.Errorf("tags = %d, want 59", len(tags))
+	}
+	if tags["acme/app00"] != "v2.0.0" {
+		t.Errorf("tag = %q", tags["acme/app00"])
+	}
+	if _, ok := tags["acme/none"]; ok {
+		t.Error("repository without a release must be omitted")
+	}
+}
+
+func TestLatestTagsRequiresToken(t *testing.T) {
+	t.Setenv("GQL_TOKEN", "")
+	t.Setenv("GH_TOKEN", "")
+	c, _ := New(config.GitHub{APIBase: "https://api.github.com", TokenEnv: "GQL_TOKEN"}, "", "", 0)
+	if _, err := c.LatestTags(context.Background(), []string{"acme/app"}); err == nil {
+		t.Fatal("want error without a token")
+	}
+}
+
+func TestGraphQLURLEndpoint(t *testing.T) {
+	cases := map[string]string{
+		"https://api.github.com":     "https://api.github.com/graphql",
+		"https://ghe.example/api/v3": "https://ghe.example/api/graphql",
+		"https://ghe.example":        "https://ghe.example/graphql",
+	}
+	for base, want := range cases {
+		c := &Client{apiBase: base}
+		if got := c.graphqlURL(); got != want {
+			t.Errorf("graphqlURL(%q) = %q, want %q", base, got, want)
+		}
 	}
 }
 

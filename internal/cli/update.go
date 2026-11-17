@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"os"
 
 	"github.com/spf13/cobra"
 
@@ -53,15 +54,20 @@ Pinned apps are skipped unless named explicitly.`,
 					}
 				}
 				if len(updates) == 0 {
+					if flags.json {
+						return printJSON(os.Stdout, []installResultJSON{})
+					}
 					fmt.Fprintln(cmd.OutOrStdout(), "Everything is up to date.")
 					return nil
 				}
-				for _, r := range updates {
-					cur := r.InstalledVersion
-					if cur == "" {
-						cur = "(not installed)"
+				if !flags.json {
+					for _, r := range updates {
+						cur := r.InstalledVersion
+						if cur == "" {
+							cur = "(not installed)"
+						}
+						fmt.Fprintf(cmd.OutOrStdout(), "  %-16s %s -> %s\n", r.ID, cur, r.LatestVersion)
 					}
-					fmt.Fprintf(cmd.OutOrStdout(), "  %-16s %s -> %s\n", r.ID, cur, r.LatestTag)
 				}
 				if !yes && !confirm(fmt.Sprintf("Update %d app(s)?", len(updates))) {
 					fmt.Fprintln(cmd.ErrOrStderr(), "aborted")

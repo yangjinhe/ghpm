@@ -10,6 +10,8 @@ import (
 	"strings"
 
 	"gopkg.in/yaml.v3"
+
+	"ghpm/internal/signature"
 )
 
 // Paths holds every filesystem location ghpm uses.
@@ -125,14 +127,15 @@ type Install struct {
 
 // App is one managed GitHub project.
 type App struct {
-	ID          string  `yaml:"id"`
-	Repo        string  `yaml:"repo"`
-	Channel     string  `yaml:"channel,omitempty"` // latest | prerelease | tag:vX.Y.Z
-	Description string  `yaml:"description,omitempty"`
-	Match       Match   `yaml:"match"`
-	Install     Install `yaml:"install,omitempty"`
-	Verify      string  `yaml:"verify,omitempty"`
-	Pinned      bool    `yaml:"pinned,omitempty"`
+	ID          string           `yaml:"id"`
+	Repo        string           `yaml:"repo"`
+	Channel     string           `yaml:"channel,omitempty"` // latest | prerelease | tag:vX.Y.Z
+	Description string           `yaml:"description,omitempty"`
+	Match       Match            `yaml:"match"`
+	Install     Install          `yaml:"install,omitempty"`
+	Signature   signature.Config `yaml:"signature,omitempty"`
+	Verify      string           `yaml:"verify,omitempty"`
+	Pinned      bool             `yaml:"pinned,omitempty"`
 }
 
 // VerifyMode returns the effective checksum policy for an app.
@@ -272,6 +275,12 @@ func (c *Config) Validate() error {
 		case "", "binary", "archive", "deb", "rpm", "appimage", "script":
 		default:
 			return fmt.Errorf("app %q: unknown install.type %q", a.ID, a.Install.Type)
+		}
+		if err := a.Signature.Validate(a.ID); err != nil {
+			return err
+		}
+		if a.Signature.Enabled() && a.Verify == "skip" {
+			return fmt.Errorf("app %q: signature verification cannot be combined with verify: skip", a.ID)
 		}
 		for _, k := range keysOf(a.Match.Platforms) {
 			if _, err := ParsePlatformKey(k); err != nil {

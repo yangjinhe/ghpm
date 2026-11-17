@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"ghpm/internal/signature"
 )
 
 func TestParseRepo(t *testing.T) {
@@ -112,5 +114,49 @@ func TestLoadMissingCreatesDefaults(t *testing.T) {
 	}
 	if _, err := os.Stat(paths.ConfigFile); !os.IsNotExist(err) {
 		t.Error("Load must not create the file")
+	}
+}
+
+func TestSignatureRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	paths := DefaultPaths()
+	paths.ConfigFile = filepath.Join(dir, "config.yaml")
+	cfg := DefaultsConfig(paths)
+	cfg.Apps = []App{
+		{ID: "signed", Repo: "acme/signed", Signature: signature.Config{Type: "minisign", Key: "RWQtest", Mode: "required"}},
+		{ID: "plain", Repo: "acme/plain"},
+	}
+	if err := cfg.Save(); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(paths.ConfigFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Count(string(data), "signature:") != 1 {
+		t.Errorf("empty signature blocks must be omitted:\n%s", data)
+	}
+	loaded, err := Load(paths)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := loaded.AppByID("signed")
+	if got == nil || got.Signature.Type != "minisign" || got.Signature.Key != "RWQtest" || !got.Signature.Enabled() {
+		t.Fatalf("signature not reloaded: %+v", got)
+	}
+	if plain := loaded.AppByID("plain"); plain == nil || plain.Signature.Configured() {
+		t.Fatalf("plain app gained a signature block: %+v", plain)
+	}
+}
+
+func TestSignatureValidation(t *testing.T) {
+	cfg := DefaultsConfig(DefaultPaths())
+	cfg.Apps = []App{{ID: "bad", Repo: "a/b", Signature: signature.Config{Type: "cosign"}}}
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "signature.type") {
+		t.Fatalf("want signature.type error, got %v", err)
+	}
+	cfg.Apps = []App{{ID: "skip", Repo: "a/b", Verify: "skip", Signature: signature.Config{Mode: "if-available"}}}
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("signature + verify: skip must be rejected")
 	}
 }

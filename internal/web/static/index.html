@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ghpm · GitHub 软件管理器</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="logo">ghpm</span>
+      <span id="platform" class="muted"></span>
+    </div>
+    <div class="meta">
+      <span id="token" class="chip" hidden></span>
+      <span id="config-path" class="chip mono" title="配置文件"></span>
+    </div>
+  </header>
+
+  <main>
+    <section class="toolbar">
+      <input id="search" type="search" placeholder="筛选应用…（/ 聚焦）" autocomplete="off">
+      <div class="filters" role="tablist" aria-label="筛选">
+        <button data-filter="all" class="active">全部</button>
+        <button data-filter="updates">可更新</button>
+        <button data-filter="installed">已安装</button>
+        <button data-filter="missing">未安装</button>
+      </div>
+      <div class="actions">
+        <button id="btn-install-sel" class="ghost" disabled>安装所选</button>
+        <button id="btn-update-sel" class="ghost" disabled>升级所选</button>
+        <button id="btn-check" class="ghost">检查更新</button>
+        <button id="btn-add" class="primary">添加应用</button>
+      </div>
+    </section>
+
+    <section class="list" id="list" aria-live="polite"></section>
+    <p class="empty" id="empty" hidden></p>
+  </main>
+
+  <section class="drawer" id="drawer" hidden>
+    <div class="drawer-head">
+      <strong id="job-title">任务</strong>
+      <span id="job-status" class="chip"></span>
+      <span class="spacer"></span>
+      <button id="drawer-close" class="icon" title="收起">×</button>
+    </div>
+    <div class="progress-list" id="progress-list"></div>
+    <pre class="log" id="log" hidden></pre>
+  </section>
+
+  <dialog id="add-dialog">
+    <form id="add-form">
+      <h2>添加应用</h2>
+      <label>GitHub 仓库
+        <input id="add-repo" name="repo" placeholder="owner/repo 或 https://github.com/owner/repo" required autocomplete="off">
+      </label>
+      <label>应用 ID（可选）
+        <input id="add-id" name="id" placeholder="默认使用仓库名" autocomplete="off">
+      </label>
+      <label>频道
+        <select id="add-channel" name="channel">
+          <option value="latest">latest（稳定版）</option>
+          <option value="prerelease">prerelease（含预发布）</option>
+        </select>
+      </label>
+      <label class="checkbox">
+        <input type="checkbox" id="add-install" checked> 添加后立即安装
+      </label>
+      <p class="hint">ghpm 会自动识别本机平台并生成资产映射，可稍后在配置文件中手工调整。</p>
+      <div class="dialog-actions">
+        <button type="button" id="add-cancel" class="ghost">取消</button>
+        <button type="submit" class="primary">添加</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="detail-dialog">
+    <div class="detail">
+      <h2 id="detail-title"></h2>
+      <div id="detail-body"></div>
+      <div class="dialog-actions">
+        <button type="button" id="detail-purge" class="danger ghost">删除配置</button>
+        <span class="spacer"></span>
+        <button type="button" id="detail-close" class="ghost">关闭</button>
+      </div>
+    </div>
+  </dialog>
+
+  <div id="toasts" class="toasts" aria-live="assertive"></div>
+  <script src="/app.js"></script>
+</body>
+</html>

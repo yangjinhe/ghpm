@@ -61,6 +61,8 @@ func newRoot() *cobra.Command {
 		newDoctorCmd(),
 		newConfigCmd(),
 		newTUICmd(),
+		newWebCmd(),
+		newDocCmd(),
 	)
 	return root
 }

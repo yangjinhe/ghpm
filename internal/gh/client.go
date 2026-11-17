@@ -3,6 +3,7 @@
 package gh
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -93,6 +94,7 @@ type Client struct {
 	http        *http.Client
 	apiBase     string
 	token       string
+	UserAgent   string
 	cacheDir    string
 	ttl         time.Duration
 	BypassCache bool
@@ -134,15 +136,24 @@ func New(cfg config.GitHub, proxy, cacheDir string, ttl time.Duration) (*Client,
 			Transport: tr,
 			Timeout:   45 * time.Second,
 		},
-		apiBase:  strings.TrimRight(cfg.APIBase, "/"),
-		token:    token,
-		cacheDir: cacheDir,
-		ttl:      ttl,
+		apiBase:   strings.TrimRight(cfg.APIBase, "/"),
+		token:     token,
+		UserAgent: UserAgent,
+		cacheDir:  cacheDir,
+		ttl:       ttl,
 	}, nil
 }
 
 // HasToken reports whether requests are authenticated.
 func (c *Client) HasToken() bool { return c.token != "" }
+
+// ua returns the client user agent, falling back to the package default.
+func (c *Client) ua() string {
+	if c.UserAgent != "" {
+		return c.UserAgent
+	}
+	return UserAgent
+}
 
 // RateLimit returns the most recently observed quota.
 func (c *Client) RateLimit() RateLimit {
@@ -206,6 +217,116 @@ func (c *Client) ReleaseByTag(ctx context.Context, repo, tag string) (*Release, 
 		return nil, err
 	}
 	return &rel, nil
+}
+
+// LatestTags returns the latest stable tag for many repositories using one
+// GraphQL query per 50 repos (GraphQL requires authentication). Repositories
+// without a release, or for which GitHub reported an error, are simply absent
+// from the result so callers can fall back to the REST API.
+func (c *Client) LatestTags(ctx context.Context, repos []string) (map[string]string, error) {
+	if c.token == "" {
+		return nil, errors.New("graphql requires GITHUB_TOKEN")
+	}
+	out := make(map[string]string, len(repos))
+	const chunk = 50
+	for start := 0; start < len(repos); start += chunk {
+		end := start + chunk
+		if end > len(repos) {
+			end = len(repos)
+		}
+		if err := c.latestTagsChunk(ctx, repos[start:end], out); err != nil {
+			return out, err
+		}
+	}
+	return out, nil
+}
+
+type graphQLResponse struct {
+	Data   map[string]graphQLRepo `json:"data"`
+	Errors []struct {
+		Type    string `json:"type"`
+		Message string `json:"message"`
+	} `json:"errors"`
+}
+
+type graphQLRepo struct {
+	LatestRelease *struct {
+		TagName string `json:"tagName"`
+	} `json:"latestRelease"`
+}
+
+func (c *Client) latestTagsChunk(ctx context.Context, repos []string, out map[string]string) error {
+	var q strings.Builder
+	q.WriteString("query{")
+	for i, repo := range repos {
+		owner, name, ok := splitRepo(repo)
+		if !ok {
+			continue
+		}
+		fmt.Fprintf(&q, `r%d:repository(owner:%s,name:%s){latestRelease{tagName}}`, i, strconv.Quote(owner), strconv.Quote(name))
+	}
+	q.WriteString("}")
+
+	payload, err := json.Marshal(map[string]string{"query": q.String()})
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.graphqlURL(), bytes.NewReader(payload))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("User-Agent", c.ua())
+	req.Header.Set("Authorization", "Bearer "+c.token)
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	c.recordLimit(resp.Header)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
+	if err != nil {
+		return err
+	}
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("github graphql returned %d: %s", resp.StatusCode, snippet(body))
+	}
+	var decoded graphQLResponse
+	if err := json.Unmarshal(body, &decoded); err != nil {
+		return fmt.Errorf("decode graphql response: %w", err)
+	}
+	before := len(out)
+	for i, repo := range repos {
+		r, ok := decoded.Data[fmt.Sprintf("r%d", i)]
+		if !ok || r.LatestRelease == nil || r.LatestRelease.TagName == "" {
+			continue
+		}
+		out[repo] = r.LatestRelease.TagName
+	}
+	// GraphQL reports per-repo problems in "errors" while still returning
+	// usable data. Only treat it as a failure when this chunk produced
+	// nothing at all.
+	if len(decoded.Errors) > 0 && len(out) == before {
+		return fmt.Errorf("github graphql: %s", decoded.Errors[0].Message)
+	}
+	return nil
+}
+
+func (c *Client) graphqlURL() string {
+	base := strings.TrimRight(c.apiBase, "/")
+	if strings.HasSuffix(base, "/api/v3") {
+		return strings.TrimSuffix(base, "/api/v3") + "/api/graphql"
+	}
+	return base + "/graphql"
+}
+
+func splitRepo(repo string) (owner, name string, ok bool) {
+	parts := strings.SplitN(repo, "/", 2)
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+		return "", "", false
+	}
+	return parts[0], parts[1], true
 }
 
 func (c *Client) repoURL(repo, suffix string) string {
@@ -338,7 +459,7 @@ func (c *Client) do(ctx context.Context, u string, cached *cacheEntry) ([]byte, 
 	}
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
-	req.Header.Set("User-Agent", UserAgent)
+	req.Header.Set("User-Agent", c.ua())
 	if c.token != "" {
 		req.Header.Set("Authorization", "Bearer "+c.token)
 	}

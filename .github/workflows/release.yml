@@ -39,13 +39,45 @@ jobs:
             -o "dist/${name}/ghpm" ./cmd/ghpm
           cp README.md "dist/${name}/"
           cp examples/config.yaml "dist/${name}/examples/"
+          "dist/${name}/ghpm" doc --dir "dist/${name}/docs"
           tar -czf "dist/${name}.tar.gz" -C dist "${name}"
           ( cd dist && sha256sum "${name}.tar.gz" > "${name}.tar.gz.sha256" )
+      - name: Build deb package
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          set -eu
+          version="${GITHUB_REF_NAME#v}"
+          name="ghpm_${version}_${GOOS}_${GOARCH}"
+          pkg="pkg"
+          rm -rf "$pkg"
+          mkdir -p "$pkg/DEBIAN" "$pkg/usr/bin" "$pkg/usr/share/man/man1" "$pkg/usr/share/doc/ghpm"
+          cp "dist/${name}/ghpm" "$pkg/usr/bin/ghpm"
+          for m in "dist/${name}"/docs/man/*.1; do
+            gzip -9c "$m" > "$pkg/usr/share/man/man1/$(basename "$m").gz"
+          done
+          cp README.md CHANGELOG.md "$pkg/usr/share/doc/ghpm/"
+          cat > "$pkg/DEBIAN/control" <<EOF
+          Package: ghpm
+          Version: ${version}
+          Architecture: ${GOARCH}
+          Maintainer: yangjinhe
+          Section: utils
+          Priority: optional
+          Description: Manage binaries published on GitHub releases
+           ghpm resolves release assets for the current platform, verifies them,
+           installs them under ~/.local for the current user, and tracks updates.
+          EOF
+          dpkg-deb --build --root-owner-group "$pkg" "dist/ghpm_${version}_${GOARCH}.deb"
+          ( cd dist && sha256sum "ghpm_${version}_${GOARCH}.deb" > "ghpm_${version}_${GOARCH}.deb.sha256" )
       - name: Publish release assets
         uses: softprops/action-gh-release@v2
         with:
           files: |
             dist/*.tar.gz
-            dist/*.sha256
+            dist/*.tar.gz.sha256
+            dist/*.deb
+            dist/*.deb.sha256
           generate_release_notes: true
           fail_on_unmatched_files: true

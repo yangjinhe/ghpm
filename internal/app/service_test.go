@@ -5,7 +5,10 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -13,11 +16,16 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 
+	"golang.org/x/crypto/blake2b"
+
 	"ghpm/internal/config"
+	"ghpm/internal/signature"
 )
 
 func tarGz(t *testing.T, name, body string) []byte {
@@ -357,6 +365,140 @@ func TestPinnedSkipsUpdates(t *testing.T) {
 	}
 	if ids := svc.UpdateIDs(); len(ids) != 0 {
 		t.Errorf("pinned app in update list: %v", ids)
+	}
+}
+
+func TestInstallVerifiesMinisignChecksums(t *testing.T) {
+	asset := tarGz(t, "signed", "payload")
+	assetName := "signed_1.0.0_linux_amd64.tar.gz"
+	checksums := fmt.Sprintf("%s  %s\n", sha(asset), assetName)
+
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyID := make([]byte, 8)
+	if _, err := rand.Read(keyID); err != nil {
+		t.Fatal(err)
+	}
+	sum := blake2b.Sum512([]byte(checksums))
+	sigBlob := append(append([]byte("Ed"), keyID...), ed25519.Sign(priv, sum[:])...)
+	sigFile := []byte("untrusted comment: signature from minisign secret key\n" +
+		base64.StdEncoding.EncodeToString(sigBlob) + "\ntrusted comment: timestamp:1\tfile:checksums.txt\n")
+	pubFile := base64.StdEncoding.EncodeToString(append(append([]byte("Ed"), keyID...), pub...))
+
+	files := map[string][]byte{assetName: asset, "checksums.txt": []byte(checksums), "checksums.txt.minisig": sigFile}
+	mux := http.NewServeMux()
+	var base string
+	mux.HandleFunc("/repos/acme/signed/releases/latest", func(w http.ResponseWriter, r *http.Request) {
+		assets := []map[string]any{}
+		for i, name := range []string{assetName, "checksums.txt", "checksums.txt.minisig"} {
+			assets = append(assets, map[string]any{
+				"id": i + 1, "name": name, "size": len(files[name]),
+				"browser_download_url": base + "/download/" + name,
+				"url":                  base + "/assets/" + name,
+			})
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"tag_name": "v1.0.0", "name": "v1.0.0", "draft": false, "prerelease": false, "assets": assets,
+		})
+	})
+	mux.HandleFunc("/download/", func(w http.ResponseWriter, r *http.Request) {
+		name := strings.TrimPrefix(r.URL.Path, "/download/")
+		data, ok := files[name]
+		if !ok {
+			http.NotFound(w, r)
+			return
+		}
+		_, _ = w.Write(data)
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	base = srv.URL
+
+	app := config.App{
+		ID: "signed", Repo: "acme/signed", Channel: "latest",
+		Match:   config.Match{Platforms: map[string]string{"linux/amd64": assetName}},
+		Install: config.Install{Type: "archive", Bin: "signed"},
+		Signature: signature.Config{
+			Type: "minisign", Key: pubFile, Mode: "required",
+		},
+	}
+	paths, _ := testConfig(t, base, app)
+	svc, err := New(Options{ConfigPath: paths.ConfigFile})
+	if err != nil {
+		t.Fatal(err)
+	}
+	res := svc.InstallOne(context.Background(), "signed", InstallOptions{})
+	if res.Err != nil {
+		t.Fatalf("install with valid signature: %v", res.Err)
+	}
+	if data, err := os.ReadFile(filepath.Join(paths.BinDir, "signed")); err != nil || string(data) != "payload" {
+		t.Fatalf("binary = %q, err = %v", data, err)
+	}
+
+	// Sign the same manifest with a different key and drop the cached copy:
+	// the next install must fail instead of silently accepting the checksum.
+	_ = os.RemoveAll(filepath.Join(svc.CacheDir, "signatures"))
+	otherPub, otherPriv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = otherPub
+	wrongBlob := append(append([]byte("Ed"), keyID...), ed25519.Sign(otherPriv, sum[:])...)
+	files["checksums.txt.minisig"] = []byte("untrusted comment: signature from minisign secret key\n" +
+		base64.StdEncoding.EncodeToString(wrongBlob) + "\n")
+	res = svc.InstallOne(context.Background(), "signed", InstallOptions{})
+	if res.Err == nil || !strings.Contains(strings.ToLower(res.Err.Error()), "signature") {
+		t.Fatalf("want signature failure, got %v", res.Err)
+	}
+}
+
+func TestCheckUsesGraphQLBatch(t *testing.T) {
+	var restCalls, graphqlCalls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/graphql" {
+			graphqlCalls.Add(1)
+			var req struct{ Query string }
+			_ = json.NewDecoder(r.Body).Decode(&req)
+			data := map[string]any{}
+			re := regexp.MustCompile(`r(\d+):repository\(owner:"([^"]+)",name:"([^"]+)"\)`)
+			for _, m := range re.FindAllStringSubmatch(req.Query, -1) {
+				data["r"+m[1]] = map[string]any{"latestRelease": map[string]any{"tagName": "v2.0.0"}}
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"data": data})
+			return
+		}
+		restCalls.Add(1)
+		http.NotFound(w, r)
+	}))
+	defer srv.Close()
+
+	appA := config.App{ID: "a", Repo: "acme/a", Channel: "latest"}
+	appB := config.App{ID: "b", Repo: "acme/b", Channel: "latest"}
+	paths, _ := testConfig(t, srv.URL, appA, appB)
+	t.Setenv("GITHUB_TOKEN", "batch-token")
+	svc, err := New(Options{ConfigPath: paths.ConfigFile})
+	if err != nil {
+		t.Fatal(err)
+	}
+	results := svc.CheckFresh(context.Background(), nil, nil)
+	if len(results) != 2 {
+		t.Fatalf("results = %+v", results)
+	}
+	for _, r := range results {
+		if r.Err != nil {
+			t.Fatalf("%s: %v", r.ID, r.Err)
+		}
+		if r.LatestTag != "v2.0.0" || !r.UpdateAvailable {
+			t.Errorf("%s = %+v", r.ID, r)
+		}
+	}
+	if graphqlCalls.Load() != 1 {
+		t.Errorf("graphql calls = %d, want 1", graphqlCalls.Load())
+	}
+	if restCalls.Load() != 0 {
+		t.Errorf("rest calls = %d, want 0", restCalls.Load())
 	}
 }
 

@@ -23,6 +23,7 @@ import (
 	"ghpm/internal/installer"
 	"ghpm/internal/platform"
 	"ghpm/internal/resolver"
+	"ghpm/internal/signature"
 	"ghpm/internal/state"
 	"ghpm/internal/version"
 )
@@ -84,7 +85,7 @@ func New(opts Options) (*Service, error) {
 	if opts.NoCache {
 		ghClient.BypassCache = true
 	}
-	gh.UserAgent = "ghpm/" + version.String()
+	ghClient.UserAgent = "ghpm/" + version.String()
 	fetcher, err := download.New(proxy)
 	if err != nil {
 		return nil, err
@@ -293,15 +294,34 @@ func (s *Service) InstallOne(ctx context.Context, id string, opts InstallOptions
 	}
 
 	verify := s.Cfg.VerifyMode(*app)
-	sha, warnings, err := s.checksumFor(ctx, rel, asset, *app, verify)
+	if verify == "skip" && app.Signature.Enabled() {
+		w := "signature verification skipped because verify is set to skip"
+		if app.Signature.NormalizedMode() == signature.ModeRequired {
+			res.Err = fmt.Errorf("%s, but signature.mode is required", w)
+			opts.Progress.emit(Event{Kind: "error", ID: id, Err: res.Err})
+			return res
+		}
+		res.Warnings = append(res.Warnings, w)
+	}
+	cs, warnings, err := s.checksumFor(ctx, rel, asset, *app, verify, app.Signature.Enabled() && verify != "skip")
 	if err != nil {
 		res.Err = err
 		opts.Progress.emit(Event{Kind: "error", ID: id, Err: err})
 		return res
 	}
 	res.Warnings = append(res.Warnings, warnings...)
+	sha := cs.SHA
 	if verify == "skip" {
 		sha = ""
+	}
+	if app.Signature.Enabled() && verify != "skip" {
+		sigWarnings, err := s.verifyChecksumSignature(ctx, rel, *app, cs)
+		if err != nil {
+			res.Err = err
+			opts.Progress.emit(Event{Kind: "error", ID: id, Err: err})
+			return res
+		}
+		res.Warnings = append(res.Warnings, sigWarnings...)
 	}
 
 	prior, _ := s.Store.Load()
@@ -379,28 +399,50 @@ func (s *Service) InstallOne(ctx context.Context, id string, opts InstallOptions
 
 func (s *Service) proxy() string { return s.Cfg.Defaults.Proxy }
 
+// checksumInfo is what checksumFor learned about an asset.
+type checksumInfo struct {
+	SHA           string
+	ManifestAsset string // checksum file in the release, when one was used
+	ManifestPath  string // cached copy of that manifest
+}
+
 // checksumFor finds a SHA-256 for asset: API digest first, then a checksum
-// manifest from the release.
-func (s *Service) checksumFor(ctx context.Context, rel *gh.Release, asset gh.Asset, app config.App, verify string) (string, []string, error) {
+// manifest from the release. When needManifest is set (signature
+// verification), the manifest is always fetched so its detached signature can
+// be checked, and the API digest is cross-checked against it.
+func (s *Service) checksumFor(ctx context.Context, rel *gh.Release, asset gh.Asset, app config.App, verify string, needManifest bool) (checksumInfo, []string, error) {
+	var info checksumInfo
 	if verify == "skip" {
-		return "", nil, nil
+		return info, nil, nil
 	}
-	if d := digestSHA(asset.Digest); d != "" {
-		return d, nil, nil
-	}
+	apiDigest := digestSHA(asset.Digest)
 	csName := resolver.ChecksumAsset(rel.AssetNames(), asset.Name)
 	if csName == "" {
-		if verify == "required" {
-			return "", nil, fmt.Errorf("no checksum available for %s and verify=required", asset.Name)
+		if apiDigest != "" {
+			if needManifest && verify == "required" {
+				return info, nil, fmt.Errorf("signature verification needs a checksum manifest, but %s publishes none", rel.TagName)
+			}
+			info.SHA = apiDigest
+			if needManifest {
+				return info, []string{"no checksum manifest published; signature not verified, using the API digest"}, nil
+			}
+			return info, nil, nil
 		}
-		return "", []string{fmt.Sprintf("no checksum published for %s; integrity not verified", asset.Name)}, nil
+		if verify == "required" {
+			return info, nil, fmt.Errorf("no checksum available for %s and verify=required", asset.Name)
+		}
+		return info, []string{fmt.Sprintf("no checksum published for %s; integrity not verified", asset.Name)}, nil
 	}
 	csAsset, ok := rel.FindAsset(csName)
 	if !ok {
 		if verify == "required" {
-			return "", nil, fmt.Errorf("checksum asset %q vanished", csName)
+			return info, nil, fmt.Errorf("checksum asset %q vanished", csName)
 		}
-		return "", []string{fmt.Sprintf("checksum asset %q missing", csName)}, nil
+		if apiDigest != "" {
+			info.SHA = apiDigest
+			return info, []string{fmt.Sprintf("checksum asset %q missing; using the API digest", csName)}, nil
+		}
+		return info, []string{fmt.Sprintf("checksum asset %q missing", csName)}, nil
 	}
 	dest := filepath.Join(s.CacheDir, "checksums", sanitizeFile(app.ID), sanitizeFile(rel.TagName), filepath.Base(csName))
 	var text []byte
@@ -417,24 +459,87 @@ func (s *Service) checksumFor(ctx context.Context, rel *gh.Release, asset gh.Ass
 			UserAgent: "ghpm/" + version.String(),
 		}); err != nil {
 			if verify == "required" {
-				return "", nil, fmt.Errorf("download checksum manifest: %w", err)
+				return info, nil, fmt.Errorf("download checksum manifest: %w", err)
 			}
-			return "", []string{fmt.Sprintf("could not download checksum manifest %s: %v", csName, err)}, nil
+			if apiDigest != "" {
+				info.SHA = apiDigest
+				return info, []string{fmt.Sprintf("could not download checksum manifest %s (%v); using the API digest", csName, err)}, nil
+			}
+			return info, []string{fmt.Sprintf("could not download checksum manifest %s: %v", csName, err)}, nil
 		}
 		data, err := os.ReadFile(dest)
 		if err != nil {
-			return "", nil, err
+			return info, nil, err
 		}
 		text = data
 	}
 	sum, ok := download.FindChecksum(string(text), asset.Name)
 	if !ok {
 		if verify == "required" {
-			return "", nil, fmt.Errorf("%s does not list %s", csName, asset.Name)
+			return info, nil, fmt.Errorf("%s does not list %s", csName, asset.Name)
 		}
-		return "", []string{fmt.Sprintf("%s does not list %s; integrity not verified", csName, asset.Name)}, nil
+		if apiDigest != "" {
+			info.SHA = apiDigest
+			return info, []string{fmt.Sprintf("%s does not list %s; using the API digest", csName, asset.Name)}, nil
+		}
+		return info, []string{fmt.Sprintf("%s does not list %s; integrity not verified", csName, asset.Name)}, nil
 	}
-	return sum, nil, nil
+	if apiDigest != "" && !strings.EqualFold(apiDigest, sum) {
+		return info, nil, fmt.Errorf("checksum mismatch for %s: GitHub reports %s, %s lists %s", asset.Name, apiDigest, csName, sum)
+	}
+	info = checksumInfo{SHA: sum, ManifestAsset: csName, ManifestPath: dest}
+	return info, nil, nil
+}
+
+// verifyChecksumSignature downloads the detached signature for the checksum
+// manifest and verifies it. It returns advisory warnings for optional checks
+// that could not run.
+func (s *Service) verifyChecksumSignature(ctx context.Context, rel *gh.Release, app config.App, info checksumInfo) ([]string, error) {
+	mode := app.Signature.NormalizedMode()
+	if info.ManifestAsset == "" {
+		if mode == signature.ModeRequired {
+			return nil, fmt.Errorf("%s: no checksum manifest to verify", app.ID)
+		}
+		return []string{"signature verification skipped: no checksum manifest"}, nil
+	}
+	sigName := strings.TrimSpace(app.Signature.Asset)
+	if sigName == "" {
+		sigName = signature.FindAsset(rel.AssetNames(), info.ManifestAsset)
+	}
+	if sigName == "" {
+		if mode == signature.ModeRequired {
+			return nil, fmt.Errorf("%s: no signature asset found for %s (looked for .sig/.minisig/.asc)", app.ID, info.ManifestAsset)
+		}
+		return []string{fmt.Sprintf("no signature published for %s; signature not verified", info.ManifestAsset)}, nil
+	}
+	sigAsset, ok := rel.FindAsset(sigName)
+	if !ok {
+		if mode == signature.ModeRequired {
+			return nil, fmt.Errorf("%s: signature asset %q vanished from release %s", app.ID, sigName, rel.TagName)
+		}
+		return []string{fmt.Sprintf("signature asset %q missing", sigName)}, nil
+	}
+	dest := filepath.Join(s.CacheDir, "signatures", sanitizeFile(app.ID), sanitizeFile(rel.TagName), filepath.Base(sigName))
+	if st, err := os.Stat(dest); err != nil || st.Size() == 0 {
+		sigURL, sigHeaders := s.GH.DownloadSource(sigAsset)
+		if _, err := s.Fetcher.Fetch(ctx, download.Options{
+			URL:       sigURL,
+			Dest:      dest,
+			Headers:   sigHeaders,
+			Prefix:    s.Cfg.Defaults.GitHub.DownloadPrefix,
+			Proxy:     s.proxy(),
+			UserAgent: "ghpm/" + version.String(),
+		}); err != nil {
+			if mode == signature.ModeRequired {
+				return nil, fmt.Errorf("download signature %s: %w", sigName, err)
+			}
+			return []string{fmt.Sprintf("could not download signature %s: %v", sigName, err)}, nil
+		}
+	}
+	if err := signature.Verify(ctx, app.Signature, sigAsset.Name, dest, info.ManifestPath); err != nil {
+		return nil, fmt.Errorf("verify %s: %w", info.ManifestAsset, err)
+	}
+	return nil, nil
 }
 
 func digestSHA(d string) string {
@@ -533,6 +638,7 @@ func (s *Service) check(ctx context.Context, ids []string, progress ProgressFunc
 		apps = filtered
 	}
 	st, _ := s.Store.Load()
+	batch := s.batchLatestTags(ctx, apps, st)
 	results := make([]CheckResult, len(apps))
 	sem := make(chan struct{}, s.Cfg.Defaults.Concurrency)
 	var wg sync.WaitGroup
@@ -565,6 +671,17 @@ func (s *Service) check(ctx context.Context, ids []string, progress ProgressFunc
 				results[i] = r
 				return
 			}
+			if tag, ok := batch[a.Repo]; ok {
+				r.LatestTag = tag
+				r.LatestVersion = VersionFromTag(tag)
+				r.UpdateAvailable, r.Comparable = CompareVersions(r.InstalledVersion, r.LatestVersion)
+				results[i] = r
+				if rec != nil {
+					_ = s.Store.TouchCheck(a.ID, r.LatestVersion, r.LatestTag, nil)
+				}
+				progress.emit(Event{Kind: "check", ID: a.ID, Message: r.LatestVersion})
+				return
+			}
 			var rel *gh.Release
 			var err error
 			if fresh {
@@ -595,6 +712,35 @@ func (s *Service) check(ctx context.Context, ids []string, progress ProgressFunc
 	}
 	wg.Wait()
 	return results
+}
+
+// batchLatestTags fetches latest tags for stable-channel apps in one GraphQL
+// query. Partial results are still useful; failures fall back to the REST
+// path in check. Requires a token (GraphQL has no anonymous access).
+func (s *Service) batchLatestTags(ctx context.Context, apps []config.App, st *state.State) map[string]string {
+	if !s.GH.HasToken() {
+		return nil
+	}
+	seen := map[string]bool{}
+	var repos []string
+	for _, a := range apps {
+		if ch := a.Channel; ch != "" && ch != "latest" {
+			continue
+		}
+		if rec := st.Apps[a.ID]; rec != nil && rec.Pinned {
+			continue
+		}
+		if seen[a.Repo] {
+			continue
+		}
+		seen[a.Repo] = true
+		repos = append(repos, a.Repo)
+	}
+	if len(repos) < 2 {
+		return nil
+	}
+	tags, _ := s.GH.LatestTags(ctx, repos)
+	return tags
 }
 
 // CompareVersions reports whether latest is newer than current and whether
