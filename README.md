@@ -142,7 +142,7 @@ defaults:
     token_env: GITHUB_TOKEN        # 建议设置，未认证仅 60 次/小时
     api_base: https://api.github.com
     download_prefix: ""            # 例如 https://ghfast.top 或 https://m.example/{url}
-    cache_ttl_min: 30              # release 元数据缓存分钟数
+    cache_ttl_min: 30              # check 的元数据缓存；install/add/update 会强制 revalidate
 
 apps:
   # 1) 最精确：按平台写死资产名（支持 {version} {tag} 占位符）

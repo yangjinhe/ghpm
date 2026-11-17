@@ -37,7 +37,7 @@ Pinned apps are skipped unless named explicitly.`,
 				}
 			} else {
 				pf := newProgressPrinter()
-				results := svc.Check(cmd.Context(), nil, pf.Event)
+				results := svc.CheckFresh(cmd.Context(), nil, pf.Event)
 				pf.Stop()
 				var updates []app.CheckResult
 				for _, r := range results {

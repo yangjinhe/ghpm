@@ -241,8 +241,7 @@ func TestInstallCheckUpdateRollback(t *testing.T) {
 
 	// Publish v1.1.0.
 	f.setTag("v1.1.0", "1.1.0")
-	svc.GH.BypassCache = true
-	checks := svc.Check(ctx, nil, nil)
+	checks := svc.CheckFresh(ctx, nil, nil)
 	if len(checks) != 1 || checks[0].Err != nil {
 		t.Fatalf("check: %+v", checks)
 	}
@@ -352,8 +351,7 @@ func TestPinnedSkipsUpdates(t *testing.T) {
 		t.Fatal(err)
 	}
 	f.setTag("v1.1.0", "1.1.0")
-	svc.GH.BypassCache = true
-	checks := svc.Check(ctx, nil, nil)
+	checks := svc.CheckFresh(ctx, nil, nil)
 	if len(checks) != 1 || !checks[0].Pinned || checks[0].UpdateAvailable {
 		t.Errorf("pinned check = %+v", checks[0])
 	}

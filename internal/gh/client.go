@@ -155,17 +155,28 @@ func (c *Client) RateLimit() RateLimit {
 // "" / "latest" -> latest stable, "prerelease" -> newest non-draft,
 // "tag:v1.2.3" -> that exact tag.
 func (c *Client) ResolveRelease(ctx context.Context, repo, channel string) (*Release, error) {
+	return c.resolveRelease(ctx, repo, channel, false)
+}
+
+// ResolveReleaseFresh revalidates the cached release metadata (cheap: a 304
+// does not count against the rate limit). Installs and adds use it so a
+// release published minutes ago is visible immediately.
+func (c *Client) ResolveReleaseFresh(ctx context.Context, repo, channel string) (*Release, error) {
+	return c.resolveRelease(ctx, repo, channel, true)
+}
+
+func (c *Client) resolveRelease(ctx context.Context, repo, channel string, fresh bool) (*Release, error) {
 	channel = strings.TrimSpace(channel)
 	switch {
 	case channel == "", channel == "latest":
 		var rel Release
-		if err := c.getJSON(ctx, c.repoURL(repo, "/releases/latest"), &rel); err != nil {
+		if err := c.getJSON(ctx, c.repoURL(repo, "/releases/latest"), &rel, fresh); err != nil {
 			return nil, err
 		}
 		return &rel, nil
 	case channel == "prerelease":
 		var rels []Release
-		if err := c.getJSON(ctx, c.repoURL(repo, "/releases?per_page=20"), &rels); err != nil {
+		if err := c.getJSON(ctx, c.repoURL(repo, "/releases?per_page=20"), &rels, fresh); err != nil {
 			return nil, err
 		}
 		for i := range rels {
@@ -180,7 +191,7 @@ func (c *Client) ResolveRelease(ctx context.Context, repo, channel string) (*Rel
 			return nil, errors.New("empty tag in channel")
 		}
 		var rel Release
-		if err := c.getJSON(ctx, c.repoURL(repo, "/releases/tags/"+url.PathEscape(tag)), &rel); err != nil {
+		if err := c.getJSON(ctx, c.repoURL(repo, "/releases/tags/"+url.PathEscape(tag)), &rel, fresh); err != nil {
 			return nil, err
 		}
 		return &rel, nil
@@ -191,7 +202,7 @@ func (c *Client) ResolveRelease(ctx context.Context, repo, channel string) (*Rel
 // ReleaseByTag fetches one release by tag.
 func (c *Client) ReleaseByTag(ctx context.Context, repo, tag string) (*Release, error) {
 	var rel Release
-	if err := c.getJSON(ctx, c.repoURL(repo, "/releases/tags/"+url.PathEscape(tag)), &rel); err != nil {
+	if err := c.getJSON(ctx, c.repoURL(repo, "/releases/tags/"+url.PathEscape(tag)), &rel, false); err != nil {
 		return nil, err
 	}
 	return &rel, nil
@@ -260,9 +271,9 @@ func (c *Client) writeCache(u string, e *cacheEntry) {
 
 // getJSON performs a cached GET. Fresh cache entries are used without a
 // request; stale ones are revalidated with If-None-Match (304s are free).
-func (c *Client) getJSON(ctx context.Context, u string, out any) error {
+func (c *Client) getJSON(ctx context.Context, u string, out any, fresh bool) error {
 	cached, _ := c.readCache(u)
-	if cached != nil && !c.BypassCache && c.ttl > 0 && time.Since(cached.At) < c.ttl {
+	if cached != nil && !fresh && !c.BypassCache && c.ttl > 0 && time.Since(cached.At) < c.ttl {
 		if err := json.Unmarshal(cached.Body, out); err == nil {
 			return nil
 		}

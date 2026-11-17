@@ -189,7 +189,7 @@ func (s *Service) Add(ctx context.Context, opts AddOptions) (*AddResult, error) 
 	if channel != "latest" && channel != "prerelease" && !strings.HasPrefix(channel, "tag:") {
 		return nil, fmt.Errorf("channel must be latest, prerelease or tag:<tag>")
 	}
-	rel, err := s.GH.ResolveRelease(ctx, repo, channel)
+	rel, err := s.GH.ResolveReleaseFresh(ctx, repo, channel)
 	if err != nil {
 		return nil, err
 	}
@@ -269,7 +269,7 @@ func (s *Service) InstallOne(ctx context.Context, id string, opts InstallOptions
 		channel = "tag:" + opts.Tag
 	}
 	opts.Progress.emit(Event{Kind: "resolve", ID: id, Message: "resolving " + app.Repo})
-	rel, err := s.GH.ResolveRelease(ctx, app.Repo, channel)
+	rel, err := s.GH.ResolveReleaseFresh(ctx, app.Repo, channel)
 	if err != nil {
 		res.Err = err
 		opts.Progress.emit(Event{Kind: "error", ID: id, Err: err})
@@ -507,6 +507,17 @@ type CheckResult struct {
 // Check queries GitHub for every configured app, updating cached latest
 // versions in state.
 func (s *Service) Check(ctx context.Context, ids []string, progress ProgressFunc) []CheckResult {
+	return s.check(ctx, ids, progress, false)
+}
+
+// CheckFresh revalidates release metadata instead of trusting a fresh cache
+// entry. The update command uses it so newly published releases appear at
+// once.
+func (s *Service) CheckFresh(ctx context.Context, ids []string, progress ProgressFunc) []CheckResult {
+	return s.check(ctx, ids, progress, true)
+}
+
+func (s *Service) check(ctx context.Context, ids []string, progress ProgressFunc, fresh bool) []CheckResult {
 	apps := s.Cfg.Apps
 	if len(ids) > 0 {
 		want := map[string]bool{}
@@ -554,7 +565,13 @@ func (s *Service) Check(ctx context.Context, ids []string, progress ProgressFunc
 				results[i] = r
 				return
 			}
-			rel, err := s.GH.ResolveRelease(ctx, a.Repo, a.Channel)
+			var rel *gh.Release
+			var err error
+			if fresh {
+				rel, err = s.GH.ResolveReleaseFresh(ctx, a.Repo, a.Channel)
+			} else {
+				rel, err = s.GH.ResolveRelease(ctx, a.Repo, a.Channel)
+			}
 			if err != nil {
 				r.Err = err
 				results[i] = r

@@ -115,3 +115,41 @@ func TestDownloadSource(t *testing.T) {
 		t.Errorf("anonymous source = %q %v", url, headers)
 	}
 }
+
+func TestResolveReleaseFreshRevalidates(t *testing.T) {
+	var tag, etag atomic.Value
+	tag.Store("v1.0.0")
+	etag.Store(`"e1"`)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("If-None-Match") == etag.Load().(string) {
+			w.WriteHeader(http.StatusNotModified)
+			return
+		}
+		w.Header().Set("ETag", etag.Load().(string))
+		_ = json.NewEncoder(w).Encode(map[string]any{"tag_name": tag.Load().(string)})
+	}))
+	defer srv.Close()
+
+	c, err := New(config.GitHub{APIBase: srv.URL}, "", t.TempDir(), time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	rel, err := c.ResolveRelease(ctx, "acme/tool", "latest")
+	if err != nil || rel.TagName != "v1.0.0" {
+		t.Fatalf("first: %+v %v", rel, err)
+	}
+	tag.Store("v1.1.0")
+	etag.Store(`"e2"`)
+
+	// Within the TTL the cached body is returned.
+	rel, err = c.ResolveRelease(ctx, "acme/tool", "latest")
+	if err != nil || rel.TagName != "v1.0.0" {
+		t.Fatalf("cached: %+v %v", rel, err)
+	}
+	// Fresh revalidates and sees the new tag immediately.
+	rel, err = c.ResolveReleaseFresh(ctx, "acme/tool", "latest")
+	if err != nil || rel.TagName != "v1.1.0" {
+		t.Fatalf("fresh: %+v %v", rel, err)
+	}
+}
