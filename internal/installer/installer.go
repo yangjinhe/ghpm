@@ -126,7 +126,7 @@ func Install(ctx context.Context, fetcher *download.Fetcher, req Request) (res R
 		if _, err := archive.Extract(assetFile, tmpDir, req.App.Install.Stripping); err != nil {
 			return res, fmt.Errorf("extract %s: %w", req.AssetName, err)
 		}
-		bin, err := archive.FindBinary(tmpDir, req.App.Install.Bin)
+		bin, err := archive.FindBinary(tmpDir, req.App.Install.Bin, req.App.ID, req.AssetName)
 		if err != nil {
 			return res, err
 		}

@@ -303,11 +303,25 @@ type fileEntry struct {
 	mode  os.FileMode
 }
 
+var documentExts = map[string]bool{
+	".md": true, ".txt": true, ".rst": true, ".html": true, ".htm": true,
+	".pdf": true, ".json": true, ".yaml": true, ".yml": true, ".toml": true,
+	".ini": true, ".conf": true, ".cfg": true, ".service": true, ".desktop": true,
+	".1": true, ".2": true, ".3": true, ".4": true, ".5": true, ".6": true,
+	".7": true, ".8": true, ".9": true,
+}
+
+var scriptExts = map[string]bool{
+	".sh": true, ".bash": true, ".zsh": true, ".fish": true,
+	".ps1": true, ".bat": true, ".cmd": true,
+}
+
 // FindBinary locates the executable a user means. When wanted is set it is
 // matched against the file base name (and full relative path suffix). When
-// empty, the single executable file is returned; with several candidates a
-// helpful error lists them.
-func FindBinary(dir, wanted string) (string, error) {
+// empty, release archives are scored: executable bits, extension-less names
+// and hints (app id, asset stem) win; documentation and helper shell scripts
+// are ignored. hints are optional.
+func FindBinary(dir, wanted string, hints ...string) (string, error) {
 	var files []fileEntry
 	err := filepath.WalkDir(dir, func(p string, d os.DirEntry, err error) error {
 		if err != nil {
@@ -348,47 +362,81 @@ func FindBinary(dir, wanted string) (string, error) {
 		}
 		candidates := append(exact, suffix...)
 		if len(candidates) == 0 {
-			return "", fmt.Errorf("binary %q not found in archive; candidates: %s", wanted, listRel(executables(files)))
+			return "", fmt.Errorf("binary %q not found in archive; candidates: %s", wanted, listRel(files))
 		}
-		sort.SliceStable(candidates, func(i, j int) bool { return candidates[i].depth < candidates[j].depth })
+		sort.SliceStable(candidates, func(i, j int) bool {
+			ei := candidates[i].mode.Perm()&0o111 != 0
+			ej := candidates[j].mode.Perm()&0o111 != 0
+			if ei != ej {
+				return ei
+			}
+			return candidates[i].depth < candidates[j].depth
+		})
 		return candidates[0].path, nil
 	}
 
-	pool := executables(files)
-	if len(pool) == 0 {
-		pool = files
-	}
-	// Ignore obvious documentation files.
-	filtered := make([]fileEntry, 0, len(pool))
-	for _, f := range pool {
+	// Drop documentation and obvious metadata.
+	pool := make([]fileEntry, 0, len(files))
+	for _, f := range files {
 		base := strings.ToLower(filepath.Base(f.rel))
-		if strings.HasPrefix(base, "readme") || strings.HasPrefix(base, "license") ||
-			strings.HasPrefix(base, "changelog") || strings.HasSuffix(base, ".txt") ||
-			strings.HasSuffix(base, ".md") || strings.HasSuffix(base, ".1") {
+		ext := strings.ToLower(filepath.Ext(base))
+		if documentExts[ext] {
 			continue
 		}
-		filtered = append(filtered, f)
-	}
-	pool = filtered
-
-	switch len(pool) {
-	case 0:
-		return "", errors.New("no executable file found in archive")
-	case 1:
-		return pool[0].path, nil
-	}
-	sort.SliceStable(pool, func(i, j int) bool {
-		if pool[i].depth != pool[j].depth {
-			return pool[i].depth < pool[j].depth
+		if strings.HasPrefix(base, "readme") || strings.HasPrefix(base, "license") ||
+			strings.HasPrefix(base, "changelog") || strings.HasPrefix(base, "copying") {
+			continue
 		}
-		return pool[i].rel < pool[j].rel
-	})
-	if pool[0].depth < pool[1].depth {
+		pool = append(pool, f)
+	}
+	if len(pool) == 0 {
+		return "", errors.New("no installable file found in archive")
+	}
+	if len(pool) == 1 {
 		return pool[0].path, nil
 	}
-	return "", fmt.Errorf("archive contains several executables (%s); set install.bin in the app config", listRel(pool))
+
+	type scored struct {
+		fileEntry
+		score int
+	}
+	var ranked []scored
+	for _, f := range pool {
+		base := strings.ToLower(filepath.Base(f.rel))
+		baseNoExe := strings.TrimSuffix(base, ".exe")
+		ext := strings.ToLower(filepath.Ext(base))
+		score := -f.depth * 3
+		if f.mode.Perm()&0o111 != 0 {
+			score += 100
+		}
+		switch {
+		case scriptExts[ext]:
+			score -= 80
+		case ext == "":
+			score += 30
+		}
+		for _, h := range hints {
+			h = strings.TrimSuffix(strings.ToLower(filepath.Base(h)), ".exe")
+			switch {
+			case h == "":
+			case baseNoExe == h:
+				score += 45
+			case strings.HasPrefix(h, baseNoExe+"_") || strings.HasPrefix(h, baseNoExe+"-") ||
+				strings.HasPrefix(baseNoExe, h+"_") || strings.HasPrefix(baseNoExe, h+"-"):
+				score += 15
+			}
+		}
+		ranked = append(ranked, scored{fileEntry: f, score: score})
+	}
+	sort.SliceStable(ranked, func(i, j int) bool { return ranked[i].score > ranked[j].score })
+	if len(ranked) > 1 && ranked[0].score == ranked[1].score {
+		return "", fmt.Errorf("archive contains several possible binaries (%s); set install.bin in the app config",
+			listRel([]fileEntry{ranked[0].fileEntry, ranked[1].fileEntry}))
+	}
+	return ranked[0].path, nil
 }
 
+// executables returns files with any execute bit.
 func executables(files []fileEntry) []fileEntry {
 	var out []fileEntry
 	for _, f := range files {

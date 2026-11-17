@@ -151,3 +151,47 @@ func TestEntryPath(t *testing.T) {
 		}
 	}
 }
+
+func TestFindBinaryCfstStyleArchive(t *testing.T) {
+	// Upstream tars often lose the execute bit and ship helper scripts.
+	src := makeTarGz(t, []file{
+		{name: "cfst_linux_amd64/cfst", mode: 0o666, body: "ELF..."},
+		{name: "cfst_linux_amd64/cfst_hosts.sh", mode: 0o666, body: "#!/bin/sh"},
+		{name: "cfst_linux_amd64/ip.txt", mode: 0o644, body: "1.1.1.1"},
+		{name: "cfst_linux_amd64/使用说明.txt", mode: 0o644, body: "docs"},
+	})
+	dest := t.TempDir()
+	if _, err := Extract(src, dest, 0); err != nil {
+		t.Fatal(err)
+	}
+	bin, err := FindBinary(dest, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if filepath.Base(bin) != "cfst" {
+		t.Errorf("picked %q, want cfst", bin)
+	}
+	if info, err := os.Stat(bin); err != nil || info.Mode().Perm()&0o111 == 0 {
+		// Extraction keeps the stored mode; the installer chmods the chosen
+		// binary. Selection must still work before that.
+		t.Logf("mode before installer chmod: %v", info.Mode())
+	}
+}
+
+func TestFindBinaryUsesHints(t *testing.T) {
+	src := makeTarGz(t, []file{
+		{name: "pkg/tool", mode: 0o755, body: "a"},
+		{name: "pkg/helper", mode: 0o755, body: "b"},
+	})
+	dest := t.TempDir()
+	if _, err := Extract(src, dest, 0); err != nil {
+		t.Fatal(err)
+	}
+	bin, err := FindBinary(dest, "", "tool", "tool_1.0.0_linux_amd64.tar.gz")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if filepath.Base(bin) != "tool" {
+		t.Errorf("picked %q, want tool", bin)
+	}
+}

@@ -674,7 +674,7 @@ func (s *Service) Rollback(id, toVersion string) (InstallResult, error) {
 		}
 	}
 	if binRel == "" {
-		bin, err := archive.FindBinary(versionDir, app.Install.Bin)
+		bin, err := archive.FindBinary(versionDir, app.Install.Bin, app.ID)
 		if err != nil {
 			return res, err
 		}
