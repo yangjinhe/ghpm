@@ -86,6 +86,20 @@ go build -o ghpm ./cmd/ghpm
 > 如果 `~/.local/bin` 不在 `PATH` 里，`ghpm doctor` 会提示；把它加进
 > `~/.bashrc` 或 `~/.zshrc`：`export PATH="$HOME/.local/bin:$PATH"`。
 
+### 私有仓库与自举
+
+设置 `GITHUB_TOKEN` 后，API 查询和 release 资产下载都会携带鉴权，可以直接
+管理私有仓库。也可以让 ghpm 管理自己的 release：
+
+```bash
+export GITHUB_TOKEN=ghp_xxx
+ghpm add yangjinhe/ghpm --install
+ghpm check          # 有新版时会提示
+ghpm update --yes   # 自更新到最新 release
+```
+
+下载会走 GitHub API 资产端点，重定向到对象存储时自动去掉 Authorization 头。
+
 ## 命令一览
 
 | 命令 | 说明 |
