@@ -39,7 +39,10 @@ jobs:
             -o "dist/${name}/ghpm" ./cmd/ghpm
           cp README.md "dist/${name}/"
           cp examples/config.yaml "dist/${name}/examples/"
-          "dist/${name}/ghpm" doc --dir "dist/${name}/docs"
+          # Man pages are generated from the same tree and committed; running
+          # the cross-compiled binary here would fail on the amd64 runner.
+          mkdir -p "dist/${name}/docs"
+          cp -r docs/man "dist/${name}/docs/"
           tar -czf "dist/${name}.tar.gz" -C dist "${name}"
           ( cd dist && sha256sum "${name}.tar.gz" > "${name}.tar.gz.sha256" )
       - name: Build deb package

@@ -7,8 +7,6 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/cobra/doc"
-
-	"ghpm/internal/version"
 )
 
 func newDocCmd() *cobra.Command {
@@ -28,7 +26,7 @@ func newDocCmd() *cobra.Command {
 			header := &doc.GenManHeader{
 				Title:   "GHPM",
 				Section: "1",
-				Source:  "ghpm " + version.Version,
+				Source:  "ghpm",
 				Manual:  "ghpm manual",
 			}
 			if err := doc.GenManTree(root, header, manDir); err != nil {
