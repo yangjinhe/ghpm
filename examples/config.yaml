@@ -1,0 +1,49 @@
+# Example ghpm configuration. Copy to ~/.config/ghpm/config.yaml and edit.
+version: 1
+
+defaults:
+  bin_dir: ~/.local/bin
+  data_dir: ~/.local/share/ghpm
+  verify: if-available
+  prefer: gnu
+  concurrency: 4
+  prune_keep: 3
+  # proxy: http://127.0.0.1:7890
+  github:
+    token_env: GITHUB_TOKEN
+    api_base: https://api.github.com
+    # download_prefix: https://ghfast.top
+    cache_ttl_min: 30
+
+apps:
+  - id: lazygit
+    repo: jesseduffield/lazygit
+    match:
+      linux/amd64: "lazygit_{version}_Linux_x86_64.tar.gz"
+      linux/arm64: "lazygit_{version}_Linux_arm64.tar.gz"
+      darwin/amd64: "lazygit_{version}_Darwin_x86_64.tar.gz"
+      darwin/arm64: "lazygit_{version}_Darwin_arm64.tar.gz"
+      windows/amd64: "lazygit_{version}_Windows_x86_64.zip"
+    install:
+      type: archive
+      bin: lazygit
+
+  - id: fd
+    repo: sharkdp/fd
+    channel: latest
+    match:
+      template: "fd-{tag}-{arch_alias}-unknown-linux-gnu.tar.gz"
+    install:
+      type: archive
+      bin: fd
+
+  - id: ripgrep
+    repo: BurntSushi/ripgrep
+    match:
+      linux/amd64: "ripgrep-{version}-x86_64-unknown-linux-musl.tar.gz"
+      linux/arm64: "ripgrep-{version}-aarch64-unknown-linux-gnu.tar.gz"
+      darwin/amd64: "ripgrep-{version}-x86_64-apple-darwin.tar.gz"
+      darwin/arm64: "ripgrep-{version}-aarch64-apple-darwin.tar.gz"
+    install:
+      type: archive
+      bin: rg

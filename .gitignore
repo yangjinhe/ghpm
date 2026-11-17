@@ -1,0 +1,6 @@
+# build output
+/ghpm
+/ghpm.exe
+/dist/
+*.test
+*.out
