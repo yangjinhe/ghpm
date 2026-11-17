@@ -1,0 +1,47 @@
+.nh
+.TH "GHPM" "1" "Nov 2026" "ghpm 0.2.0-dev" "ghpm manual"
+
+.SH NAME
+ghpm-remove - Uninstall apps and their files
+
+
+.SH SYNOPSIS
+\fBghpm remove  [flags]\fP
+
+
+.SH DESCRIPTION
+Removes installed versions, the symlink and the state record. --purge also deletes the app from the config.
+
+
+.SH OPTIONS
+\fB-h\fP, \fB--help\fP[=false]
+	help for remove
+
+.PP
+\fB--purge\fP[=false]
+	also remove the app from the config file
+
+.PP
+\fB-y\fP, \fB--yes\fP[=false]
+	do not ask for confirmation
+
+
+.SH OPTIONS INHERITED FROM PARENT COMMANDS
+\fB-c\fP, \fB--config\fP=""
+	config file (default ~/.config/ghpm/config.yaml)
+
+.PP
+\fB--json\fP[=false]
+	machine readable output (where supported)
+
+.PP
+\fB--no-cache\fP[=false]
+	bypass the release metadata cache
+
+.PP
+\fB--proxy\fP=""
+	HTTP(S) proxy URL, overrides config
+
+
+.SH SEE ALSO
+\fBghpm(1)\fP

@@ -1,0 +1,54 @@
+.nh
+.TH "GHPM" "1" "Nov 2026" "ghpm 0.2.0-dev" "ghpm manual"
+
+.SH NAME
+ghpm-completion-powershell - Generate the autocompletion script for powershell
+
+
+.SH SYNOPSIS
+\fBghpm completion powershell [flags]\fP
+
+
+.SH DESCRIPTION
+Generate the autocompletion script for powershell.
+
+.PP
+To load completions in your current shell session:
+
+.EX
+ghpm completion powershell | Out-String | Invoke-Expression
+.EE
+
+.PP
+To load completions for every new session, add the output of the above command
+to your powershell profile.
+
+
+.SH OPTIONS
+\fB-h\fP, \fB--help\fP[=false]
+	help for powershell
+
+.PP
+\fB--no-descriptions\fP[=false]
+	disable completion descriptions
+
+
+.SH OPTIONS INHERITED FROM PARENT COMMANDS
+\fB-c\fP, \fB--config\fP=""
+	config file (default ~/.config/ghpm/config.yaml)
+
+.PP
+\fB--json\fP[=false]
+	machine readable output (where supported)
+
+.PP
+\fB--no-cache\fP[=false]
+	bypass the release metadata cache
+
+.PP
+\fB--proxy\fP=""
+	HTTP(S) proxy URL, overrides config
+
+
+.SH SEE ALSO
+\fBghpm-completion(1)\fP

@@ -1,0 +1,56 @@
+.nh
+.TH "GHPM" "1" "Nov 2026" "ghpm 0.2.0-dev" "ghpm manual"
+
+.SH NAME
+ghpm-web - Serve a local browser interface
+
+
+.SH SYNOPSIS
+\fBghpm web [flags]\fP
+
+
+.SH DESCRIPTION
+Starts a small HTTP server and serves a browser UI for the configured apps.
+
+.PP
+The server binds to loopback by default, rejects requests with non-loopback
+Host headers, and only accepts JSON writes. Pass --allow-remote to lift those
+restrictions (place it behind a reverse proxy with authentication if you do).
+
+
+.SH OPTIONS
+\fB--allow-remote\fP[=false]
+	accept non-loopback requests
+
+.PP
+\fB-h\fP, \fB--help\fP[=false]
+	help for web
+
+.PP
+\fB--listen\fP="127.0.0.1:8787"
+	address to listen on (127.0.0.1:8787)
+
+.PP
+\fB--open\fP[=false]
+	open the interface in the default browser
+
+
+.SH OPTIONS INHERITED FROM PARENT COMMANDS
+\fB-c\fP, \fB--config\fP=""
+	config file (default ~/.config/ghpm/config.yaml)
+
+.PP
+\fB--json\fP[=false]
+	machine readable output (where supported)
+
+.PP
+\fB--no-cache\fP[=false]
+	bypass the release metadata cache
+
+.PP
+\fB--proxy\fP=""
+	HTTP(S) proxy URL, overrides config
+
+
+.SH SEE ALSO
+\fBghpm(1)\fP

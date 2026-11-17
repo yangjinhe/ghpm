@@ -1,0 +1,39 @@
+.nh
+.TH "GHPM" "1" "Nov 2026" "ghpm 0.2.0-dev" "ghpm manual"
+
+.SH NAME
+ghpm - Manage GitHub release binaries
+
+
+.SH SYNOPSIS
+\fBghpm [flags]\fP
+
+
+.SH DESCRIPTION
+ghpm installs, updates and rolls back binaries published on GitHub releases.
+Configure a project once, and ghpm picks the right asset for your system.
+
+
+.SH OPTIONS
+\fB-c\fP, \fB--config\fP=""
+	config file (default ~/.config/ghpm/config.yaml)
+
+.PP
+\fB-h\fP, \fB--help\fP[=false]
+	help for ghpm
+
+.PP
+\fB--json\fP[=false]
+	machine readable output (where supported)
+
+.PP
+\fB--no-cache\fP[=false]
+	bypass the release metadata cache
+
+.PP
+\fB--proxy\fP=""
+	HTTP(S) proxy URL, overrides config
+
+
+.SH SEE ALSO
+\fBghpm-add(1)\fP, \fBghpm-assets(1)\fP, \fBghpm-check(1)\fP, \fBghpm-completion(1)\fP, \fBghpm-config(1)\fP, \fBghpm-doctor(1)\fP, \fBghpm-install(1)\fP, \fBghpm-list(1)\fP, \fBghpm-pin(1)\fP, \fBghpm-prune(1)\fP, \fBghpm-remove(1)\fP, \fBghpm-rollback(1)\fP, \fBghpm-tui(1)\fP, \fBghpm-update(1)\fP, \fBghpm-web(1)\fP

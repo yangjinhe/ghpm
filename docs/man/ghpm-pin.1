@@ -1,0 +1,44 @@
+.nh
+.TH "GHPM" "1" "Nov 2026" "ghpm 0.2.0-dev" "ghpm manual"
+
+.SH NAME
+ghpm-pin - Exclude an app from update checks
+
+
+.SH SYNOPSIS
+\fBghpm pin  [version] [flags]\fP
+
+
+.SH DESCRIPTION
+Pins an app so \fBghpm check\fR and \fBghpm update\fR skip it.
+With a version argument, ghpm first rolls back to that installed version.
+
+
+.SH OPTIONS
+\fB-h\fP, \fB--help\fP[=false]
+	help for pin
+
+.PP
+\fB--unpin\fP[=false]
+	allow updates again
+
+
+.SH OPTIONS INHERITED FROM PARENT COMMANDS
+\fB-c\fP, \fB--config\fP=""
+	config file (default ~/.config/ghpm/config.yaml)
+
+.PP
+\fB--json\fP[=false]
+	machine readable output (where supported)
+
+.PP
+\fB--no-cache\fP[=false]
+	bypass the release metadata cache
+
+.PP
+\fB--proxy\fP=""
+	HTTP(S) proxy URL, overrides config
+
+
+.SH SEE ALSO
+\fBghpm(1)\fP

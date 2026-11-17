@@ -1,0 +1,74 @@
+.nh
+.TH "GHPM" "1" "Nov 2026" "ghpm 0.2.0-dev" "ghpm manual"
+
+.SH NAME
+ghpm-add - Configure a GitHub project and pick the right assets
+
+
+.SH SYNOPSIS
+\fBghpm add  [flags]\fP
+
+
+.SH DESCRIPTION
+Resolves the latest release, identifies the asset for this machine (or the
+requested --os/--arch), and writes a match section to the config file.
+
+.PP
+Examples:
+  ghpm add jesseduffield/lazygit
+  ghpm add https://github.com/sharkdp/fd --install
+  ghpm add BurntSushi/ripgrep --arch arm64 --os linux
+
+
+.SH OPTIONS
+\fB--arch\fP=""
+	target architecture (default: this machine)
+
+.PP
+\fB--asset\fP=""
+	force a specific release asset name
+
+.PP
+\fB--channel\fP=""
+	latest, prerelease or tag:
+
+.PP
+\fB-h\fP, \fB--help\fP[=false]
+	help for add
+
+.PP
+\fB--id\fP=""
+	application id shown by ghpm (default: repository name)
+
+.PP
+\fB--install\fP[=false]
+	install immediately after adding
+
+.PP
+\fB--os\fP=""
+	target operating system (default: this machine)
+
+.PP
+\fB--prerelease\fP[=false]
+	track prereleases
+
+
+.SH OPTIONS INHERITED FROM PARENT COMMANDS
+\fB-c\fP, \fB--config\fP=""
+	config file (default ~/.config/ghpm/config.yaml)
+
+.PP
+\fB--json\fP[=false]
+	machine readable output (where supported)
+
+.PP
+\fB--no-cache\fP[=false]
+	bypass the release metadata cache
+
+.PP
+\fB--proxy\fP=""
+	HTTP(S) proxy URL, overrides config
+
+
+.SH SEE ALSO
+\fBghpm(1)\fP

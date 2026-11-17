@@ -47,3 +47,8 @@ apps:
     install:
       type: archive
       bin: rg
+    # ripgrep 的 SHA256SUMS 带 GPG 分离签名。拿到维护者公钥后启用：
+    # signature:
+    #   type: gpg
+    #   key: ~/.config/ghpm/keys/burntsushi.asc   # 公钥文件、内联公钥或指纹
+    #   mode: required                            # if-available | required | skip

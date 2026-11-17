@@ -34,11 +34,16 @@
   rename → 原子切换软链。升级失败不会破坏旧版本。
 - **版本保留与回滚**：默认保留 3 个版本，`ghpm rollback` 一条命令切回。
 - **更新检查**：ETag 条件请求（304 不计配额）、元数据缓存、并发检查、
-  限流感知；支持固定版本（pin）。
+  限流感知；有 token 时自动改用 GraphQL 批量查询（50 个仓库/请求），
+  大幅降低配额消耗；支持固定版本（pin）。
+- **签名校验**：可选校验 checksum 清单的分离签名——minisign 用原生
+  Ed25519/BLAKE2b 实现，OpenPGP 交给系统 `gpg`；校验通过后才信任
+  清单里的 SHA-256，形成“签名 → 校验和 → 资产”的完整链路。
 - **私有仓库**：设置 `GITHUB_TOKEN` 后，API 查询与资产下载都会携带鉴权。
 - **中文网络友好**：支持 `proxy` 配置（HTTP/SOCKS5）和下载镜像前缀
   （如 `https://ghfast.top`），镜像失败自动回退直连。
-- **TUI + CLI**：同一套核心逻辑，纯键盘操作。
+- **TUI + CLI + Web**：命令行、bubbletea 终端界面和本地浏览器界面共用
+  同一套服务层，行为一致。
 
 ## 构建
 
@@ -55,6 +60,13 @@ sudo make install   # 安装到 /usr/local/bin（可选）
 
 ```bash
 go build -o ghpm ./cmd/ghpm
+```
+
+Release 页面提供 linux/amd64、linux/arm64 的 `tar.gz` 和 `.deb`：
+
+```bash
+sudo dpkg -i ghpm_0.2.0_amd64.deb   # 安装到 /usr/bin，附带 man page
+tar -xzf ghpm_0.2.0_linux_amd64.tar.gz && ./ghpm_0.2.0_linux_amd64/ghpm --help
 ```
 
 ## 快速开始
@@ -81,6 +93,7 @@ go build -o ghpm ./cmd/ghpm
 
 # 交互界面
 ./ghpm tui
+./ghpm web --open        # http://127.0.0.1:8787
 ```
 
 > 如果 `~/.local/bin` 不在 `PATH` 里，`ghpm doctor` 会提示；把它加进
@@ -117,11 +130,31 @@ ghpm update --yes   # 自更新到最新 release
 | `ghpm doctor` | 路径、权限、token、限流诊断 |
 | `ghpm config [--path]` | 查看配置文件 |
 | `ghpm tui` | 交互式终端界面 |
+| `ghpm web [--listen addr] [--open]` | 本地浏览器界面（默认 127.0.0.1:8787） |
 
 通用参数：`--config/-c <file>`、`--proxy <url>`、`--no-cache`、`--json`。
 
 安装/更新相关：`--os`、`--arch`（交叉准备配置）、`--tag`（指定版本）、
 `--force`（覆盖非 ghpm 管理的同名文件）。
+
+## Web 界面
+
+`ghpm web` 启动一个仅监听本机的 HTTP 服务，用浏览器管理同一份配置：
+
+- 列表、搜索、筛选（可更新/已安装/未安装），多选批量安装/升级；
+- 检查更新、添加应用（可选立即安装）、固定、回滚、移除；
+- 下载/安装进度通过 Server-Sent Events 实时推送，任务日志可展开；
+- 写操作要求 `application/json` 并校验 Host 为回环地址，用于防御
+  DNS rebinding；默认只监听 `127.0.0.1:8787`。确需远程访问时用
+  `--allow-remote`，并自行加反向代理与认证。
+
+```bash
+ghpm web                 # 打开 http://127.0.0.1:8787
+ghpm web --open          # 同时调用默认浏览器
+ghpm web --listen 127.0.0.1:9000
+```
+
+界面资源内嵌在二进制里，不需要 Node.js 或前端构建步骤。
 
 ## 配置文件
 
@@ -190,7 +223,40 @@ apps:
     install:
       type: deb
       sudo: prompt
+
+  # 6) 要求 checksum 清单带分离签名
+  - id: signed-tool
+    repo: owner/signed-tool
+    match:
+      template: "signed-tool-{tag}-{arch_alias}-linux.tar.gz"
+    install:
+      type: archive
+    signature:
+      type: minisign            # minisign | gpg
+      key: RWQf...              # 公钥文件路径、内联 base64 或整个 .pub 内容
+      mode: required            # if-available | required | skip
 ```
+
+### 签名校验
+
+默认只核对 SHA-256。要防“发布账号被接管后替换资产”，可以要求 checksum
+清单带分离签名：
+
+```yaml
+signature:
+  type: gpg                      # minisign | gpg
+  key: ~/keys/maintainer.asc     # GPG 公钥文件；也可填指纹或内联公钥
+  mode: required                 # if-available（默认）| required | skip
+```
+
+- `minisign`：原生校验，支持默认的 BLAKE2b-512 预哈希（`Ed`）和旧式
+  `ED`；`key` 可以是公钥文件、内联 base64 或整个 `.pub` 内容。
+- `gpg`：调用系统 `gpg`。`key` 为公钥文件（或内联公钥）时导入临时
+  keyring 校验；填指纹/Key ID 时使用当前 keyring，并要求签名者匹配。
+- 签名文件按 `SHA256SUMS.sig`、`.minisig`、`.asc`、`.gpg` 等命名在
+  release 中自动查找，也可用 `signature.asset` 显式指定。
+- 签名存在但校验失败会中止安装；`if-available` 只影响“没有签名或没有
+  清单”的情况。`verify: skip` 与签名校验互斥。
 
 ### 匹配规则
 
@@ -224,6 +290,7 @@ apps:
     ├── releases/<hash>.json       # ETag 元数据缓存
     ├── downloads/<id>/<ver>/...   # 已下载资产（重装不再联网）
     ├── checksums/<id>/<ver>/...   # 校验清单
+    ├── signatures/<id>/<ver>/...  # 清单的分离签名
     └── packages/                  # deb/rpm 缓存
 ~/.local/bin/<name> -> ../share/ghpm/apps/<id>/<ver>/<file>
 ```
@@ -263,22 +330,33 @@ ghpm completion bash > ~/.local/share/bash-completion/completions/ghpm
 - 私有仓库需要设置 `GITHUB_TOKEN`；资产通过 GitHub API 端点携带 token 下载，
   重定向到对象存储时会自动去掉 Authorization 头。
 - SHA-256 校验失败会删除下载文件并中止，旧版本和软链保持不变。
+- 可选的清单签名校验在哈希校验之前执行；签名不匹配直接中止安装。
+- Web 界面默认只绑定回环地址，校验 Host 头，写操作强制 JSON。
 - 解包拒绝绝对路径、`..` 穿越和符号链接条目。
 - Token 只从环境变量读取，不写入配置或日志。
 - 只允许 HTTPS；镜像前缀只拼接下载地址，不改变资产路径。
 - 安装脚本类型默认关闭。
 
-## 已知限制（v0.1）
+## 已知限制（v0.2）
 
 - 不做依赖解析、源码编译、GitHub Actions artifacts 安装。
+- 签名只覆盖 checksum 清单；不验证 cosign/Sigstore 的无密钥签名。
 - 不自动配置 shell 补全/桌面文件；软链名默认取 app id，可用 `install.link` 调整。
 - macOS/Windows 的安装路径与包类型未做专门适配（核心逻辑可复用）。
+- Web 界面面向本机单人使用，没有内置账号体系。
 
 ## 持续集成与发布
 
 - `.github/workflows/ci.yml`：每次推送/PR 运行 gofmt、vet、测试和 race 测试。
 - `.github/workflows/release.yml`：推送 `v*` 标签时自动交叉编译
-  linux/amd64、linux/arm64，打包并上传 tar.gz 与 sha256 到 Release。
+  linux/amd64、linux/arm64，附带 README、示例配置和 man page，
+  产出 tar.gz 与 `.deb`（含手册页），并上传各自的 sha256 到 Release。
+
+生成 man page：
+
+```bash
+make docs          # 输出到 docs/man/
+```
 
 本地发布：
 
@@ -292,15 +370,17 @@ make build VERSION=0.1.1
 cmd/ghpm            CLI 入口
 internal/cli        cobra 命令与进度输出
 internal/tui        bubbletea 界面
+internal/web        本地 Web UI（内嵌静态资源 + SSE 进度）
 internal/app        编排：add/install/check/update/rollback/remove
 internal/config     YAML 配置、路径、仓库解析
-internal/gh         GitHub REST 客户端（ETag、限流）
+internal/gh         GitHub REST/GraphQL 客户端（ETag、限流、批量检查）
 internal/resolver   平台别名、资产打分与配置生成
 internal/download   断点续传、镜像前缀、SHA-256
 internal/archive    安全解包、可执行文件定位
 internal/installer  原子安装、软链、版本清理
+internal/signature  minisign / GPG 分离签名校验
 internal/state      state.json + flock
 ```
 
 设计原则：平台识别与资产选择是纯函数，便于表驱动测试；网络、文件系统
-操作集中在少数包；CLI 与 TUI 只调用 `internal/app`。
+操作集中在少数包；CLI、TUI 和 Web 只调用 `internal/app`。
