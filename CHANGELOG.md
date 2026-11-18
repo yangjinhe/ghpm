@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased — macOS support
+## v0.3.0 (2026-11-18)
+
+macOS 支持与 Gatekeeper 兼容。
 
 ### 新增
 
