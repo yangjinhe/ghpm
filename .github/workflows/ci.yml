@@ -21,3 +21,16 @@ jobs:
       - run: go vet ./...
       - run: go test ./...
       - run: go test -race ./internal/state ./internal/app ./internal/tui ./internal/web ./internal/cli ./internal/gh
+
+  test-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - run: gofmt -l . | tee /tmp/fmt.txt && test ! -s /tmp/fmt.txt
+      - run: go vet ./...
+      - run: go test ./...
+      - run: go test -race ./internal/state ./internal/app ./internal/web ./internal/cli

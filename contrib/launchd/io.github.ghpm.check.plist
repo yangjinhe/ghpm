@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>io.github.ghpm.check</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>__GHPM_BIN__</string>
+    <string>check</string>
+    <string>--notify</string>
+    <string>--json</string>
+  </array>
+  <key>StartInterval</key>
+  <integer>86400</integer>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>StandardOutPath</key>
+  <string>__LOG_DIR__/check.log</string>
+  <key>StandardErrorPath</key>
+  <string>__LOG_DIR__/check.err.log</string>
+</dict>
+</plist>

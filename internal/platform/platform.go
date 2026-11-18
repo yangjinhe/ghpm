@@ -49,9 +49,9 @@ func NormalizeOS(s string) string {
 func NormalizeArch(s string) string {
 	s = strings.ToLower(strings.TrimSpace(s))
 	switch s {
-	case "x86_64", "x86-64", "x64", "amd64", "64bit", "64-bit":
+	case "x86_64", "x86-64", "x64", "amd64", "x86_64h", "64bit", "64-bit":
 		return "amd64"
-	case "aarch64", "arm64", "armv8", "armv8l", "arm64-v8a":
+	case "aarch64", "arm64", "armv8", "armv8l", "arm64-v8a", "arm64e":
 		return "arm64"
 	case "armv7", "armv7l", "armhf", "armv7-a", "arm":
 		return "arm"
@@ -74,7 +74,7 @@ func NormalizeArch(s string) string {
 // OSTokens lists the substrings projects put in asset names for an OS.
 var OSTokens = map[string][]string{
 	"linux":     {"linux"},
-	"darwin":    {"darwin", "macos", "osx", "apple-darwin", "mac"},
+	"darwin":    {"darwin", "macos", "macosx", "osx", "apple-darwin", "mac"},
 	"windows":   {"windows", "win32", "win64", "pc-windows", "win"},
 	"freebsd":   {"freebsd"},
 	"netbsd":    {"netbsd"},
@@ -88,7 +88,7 @@ var OSTokens = map[string][]string{
 // ArchTokens lists the substrings projects put in asset names for an arch.
 // Order matters: longer, more specific tokens are listed first.
 var ArchTokens = map[string][]string{
-	"amd64":    {"x86_64", "x86-64", "amd64", "x64"},
+	"amd64":    {"x86_64h", "x86_64", "x86-64", "amd64", "x64"},
 	"arm64":    {"aarch64", "arm64", "armv8", "arm64-v8a", "arm64e"},
 	"arm":      {"armv7l", "armv7", "armhf", "armv6l", "armv6", "armv5l", "armv5", "arm"},
 	"386":      {"i686", "i386", "x86", "386"},

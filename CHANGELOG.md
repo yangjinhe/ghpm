@@ -1,5 +1,32 @@
 # Changelog
 
+## Unreleased — macOS support
+
+### 新增
+
+- **macOS 构建与发布**：新增 darwin/amd64、darwin/arm64 的 release 包；
+  CI 增加 macos-latest 作业，单元测试在 Linux 与 macOS 上同时运行。
+- **平台路径**：macOS 使用 `~/Library/Application Support/ghpm`（配置与数据）、
+  `~/Library/Caches/ghpm`、`~/Library/Logs/ghpm`；软链仍在 `~/.local/bin`。
+  显式设置 `XDG_*` 时仍然优先。
+- **资产匹配**：识别 `macos`/`osx`/`apple-darwin`、`x86_64h`、`arm64e`、
+  `universal`/`universal2`；`.pkg` 纳入可安装格式，`.dmg` 在评分中明确排除
+  （`ghpm assets` 仍会显示）。
+- **install.type pkg**：macOS 上调用 `installer -pkg ... -target /`，
+  与 deb/rpm 共用包缓存和 sudo 策略；非 macOS 上给出明确错误。
+- **通知**：macOS 使用 `osascript display notification`；新增 launchd 模板
+  `contrib/launchd/io.github.ghpm.check.plist`。
+- **归档清理**：解包和主二进制选择会忽略 `__MACOSX/`、`._*`、`.DS_Store`
+  等 AppleDouble/Finder 元数据。
+- **Gatekeeper**：安装、升级和回滚后会递归清除 `com.apple.quarantine`
+  （darwin 下使用原生 `Removexattr`/`Lremovexattr`，其他平台为空操作），
+  避免下载的程序被 macOS 拒绝执行；清理失败会作为 warning 返回。
+
+### 变更
+
+- 测试夹具改为按 `runtime.GOOS/GOARCH` 生成资产名，便于在 macOS 上运行同一套测试。
+- 版本号开发标记提升到 0.3.0-dev。
+
 ## v0.2.0 (2026-11-17)
 
 界面、供应链与工程化。

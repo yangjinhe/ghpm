@@ -251,3 +251,76 @@ func TestDebImpliesLinux(t *testing.T) {
 		t.Errorf("exe classify = %+v", c)
 	}
 }
+
+func TestDarwinAssetScoring(t *testing.T) {
+	arm := platform.Platform{OS: "darwin", Arch: "arm64"}
+	intel := platform.Platform{OS: "darwin", Arch: "amd64"}
+	linux := platform.Platform{OS: "linux", Arch: "amd64"}
+
+	matches := []struct {
+		name   string
+		target platform.Platform
+	}{
+		{"tool_1.0.0_Darwin_arm64.tar.gz", arm},
+		{"tool-1.0.0-x86_64-apple-darwin.tar.gz", intel},
+		{"tool-1.0.0-aarch64-apple-darwin.tar.gz", arm},
+		{"tool-1.0.0-macos-amd64.zip", intel},
+		{"tool-1.0.0-macosx-x86_64h.tar.gz", intel},
+		{"tool-universal-darwin.tar.gz", arm},
+		{"tool-universal-darwin.tar.gz", intel},
+		{"tool-1.0.0-universal.zip", intel},
+		{"tool_1.0.0_darwin_arm64.pkg", arm},
+	}
+	for _, c := range matches {
+		if got, ok := Score(c.name, c.target, Options{}); !ok {
+			t.Errorf("%s should match %s: %+v", c.name, c.target, got)
+		}
+	}
+
+	rejects := []struct {
+		name   string
+		target platform.Platform
+	}{
+		{"tool_1.0.0_linux_amd64.tar.gz", arm},
+		{"tool_1.0.0_darwin_amd64.tar.gz", arm},
+		{"tool_1.0.0_darwin_arm64.dmg", arm}, // disk images are not installable
+		{"tool_1.0.0_darwin_amd64.pkg", linux},
+		{"tool_1.0.0_windows_amd64.zip", intel},
+	}
+	for _, c := range rejects {
+		if got, ok := Score(c.name, c.target, Options{}); ok {
+			t.Errorf("%s must not match %s: %+v", c.name, c.target, got)
+		}
+	}
+}
+
+func TestDarwinFormatPreference(t *testing.T) {
+	arm := platform.Platform{OS: "darwin", Arch: "arm64"}
+	names := []string{
+		"tool_1.0.0_darwin_arm64.pkg",
+		"tool_1.0.0_darwin_arm64.tar.gz",
+	}
+	best, _, err := Best(names, arm, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if best.Name != "tool_1.0.0_darwin_arm64.tar.gz" {
+		t.Errorf("archive should win without an explicit type, got %q", best.Name)
+	}
+	best, _, err = Best(names, arm, Options{InstallType: "pkg"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if best.Name != "tool_1.0.0_darwin_arm64.pkg" {
+		t.Errorf("install.type pkg should win, got %q", best.Name)
+	}
+}
+
+func TestPkgAndDmgClassification(t *testing.T) {
+	if c := Classify("tool_1.0.0_darwin_arm64.pkg"); c.Format != FormatPkg || c.OS != "darwin" {
+		t.Errorf("pkg classify = %+v", c)
+	}
+	if c := Classify("tool_1.0.0.dmg"); c.Format != FormatDmg || c.OS != "darwin" {
+		t.Errorf("dmg classify = %+v", c)
+	}
+}

@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"sort"
 	"strings"
 	"time"
@@ -59,6 +60,7 @@ type Result struct {
 	LinkPath string
 	Versions []string
 	Removed  []string
+	Warnings []string
 }
 
 // ErrExistingBinary means the link target is a real file ghpm did not create.
@@ -145,7 +147,7 @@ func Install(ctx context.Context, fetcher *download.Fetcher, req Request) (res R
 		if err := copyFile(assetFile, filepath.Join(tmpDir, binRel), 0o755); err != nil {
 			return res, err
 		}
-	case "deb", "rpm":
+	case "deb", "rpm", "pkg":
 		if err := installSystemPackage(ctx, req, typeName, assetFile); err != nil {
 			return res, err
 		}
@@ -155,6 +157,8 @@ func Install(ctx context.Context, fetcher *download.Fetcher, req Request) (res R
 		res.Asset = req.AssetName
 		res.Type = typeName
 		return res, nil
+	case "dmg":
+		return res, errors.New("install.type dmg is not supported; mount it manually or configure an archive/pkg asset")
 	case "script":
 		if !req.App.Install.AllowScript {
 			return res, errors.New("script installs are disabled; set install.allow_scripts: true to opt in")
@@ -175,6 +179,11 @@ func Install(ctx context.Context, fetcher *download.Fetcher, req Request) (res R
 	}
 	if err := os.Rename(tmpDir, versionDir); err != nil {
 		return res, err
+	}
+	// macOS refuses to execute quarantined binaries. Clear the attribute on
+	// the freshly extracted tree before linking it into place.
+	if _, err := StripQuarantine(versionDir); err != nil {
+		res.Warnings = append(res.Warnings, fmt.Sprintf("could not clear macOS quarantine attribute: %v", err))
 	}
 	binAbs := filepath.Join(versionDir, binRel)
 
@@ -225,6 +234,10 @@ func inferType(asset string) string {
 		return "deb"
 	case strings.HasSuffix(lower, ".rpm"):
 		return "rpm"
+	case strings.HasSuffix(lower, ".pkg"):
+		return "pkg"
+	case strings.HasSuffix(lower, ".dmg"):
+		return "dmg"
 	case strings.HasSuffix(lower, ".appimage"):
 		return "appimage"
 	case archive.IsArchive(asset):
@@ -369,6 +382,12 @@ func installSystemPackage(ctx context.Context, req Request, typ, file string) er
 			return runCmd("zypper", args...)
 		}
 		return runCmd("rpm", "-Uvh", file)
+	case "pkg":
+		if runtime.GOOS != "darwin" {
+			return errors.New("install.type pkg is only supported on macOS")
+		}
+		args := append([]string{"-pkg", file, "-target", "/"}, req.App.Install.Args...)
+		return runCmd("installer", args...)
 	}
 	return fmt.Errorf("unsupported package type %q", typ)
 }

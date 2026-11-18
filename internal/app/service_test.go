@@ -17,6 +17,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -54,6 +55,22 @@ func sha(b []byte) string {
 	return hex.EncodeToString(sum[:])
 }
 
+// hostKey and the asset helpers keep the fixtures valid on any GOOS/GOARCH,
+// so the suite also runs on the macOS CI runner.
+func hostKey() string { return runtime.GOOS + "/" + runtime.GOARCH }
+
+func tarAsset(prefix, version string) string {
+	return fmt.Sprintf("%s_%s_%s_%s.tar.gz", prefix, version, runtime.GOOS, runtime.GOARCH)
+}
+
+func toolAsset(version string) string { return tarAsset("tool", version) }
+func badAsset() string                { return tarAsset("bad", "1.0.0") }
+func signedAsset() string             { return tarAsset("signed", "1.0.0") }
+
+func matchPattern(prefix string) string {
+	return prefix + "_{version}_" + runtime.GOOS + "_" + runtime.GOARCH + ".tar.gz"
+}
+
 type fakeGitHub struct {
 	mu       sync.Mutex
 	tag      string
@@ -86,7 +103,7 @@ func (f *fakeGitHub) release() map[string]any {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	ver := f.version
-	toolName := fmt.Sprintf("tool_%s_linux_amd64.tar.gz", ver)
+	toolName := toolAsset(ver)
 	assets := []map[string]any{
 		{
 			"id":                   1,
@@ -99,10 +116,10 @@ func (f *fakeGitHub) release() map[string]any {
 	if f.withBad {
 		assets = append(assets, map[string]any{
 			"id":                   2,
-			"name":                 "bad_1.0.0_linux_amd64.tar.gz",
-			"size":                 len(f.archives["bad_1.0.0_linux_amd64.tar.gz"]),
-			"browser_download_url": f.base + "/download/bad_1.0.0_linux_amd64.tar.gz",
-			"url":                  f.base + "/assets/bad_1.0.0_linux_amd64.tar.gz",
+			"name":                 badAsset(),
+			"size":                 len(f.archives[badAsset()]),
+			"browser_download_url": f.base + "/download/" + badAsset(),
+			"url":                  f.base + "/assets/" + badAsset(),
 		})
 	}
 	assets = append(assets, map[string]any{
@@ -121,10 +138,10 @@ func (f *fakeGitHub) release() map[string]any {
 func (f *fakeGitHub) checksums() string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	toolName := fmt.Sprintf("tool_%s_linux_amd64.tar.gz", f.version)
+	toolName := toolAsset(f.version)
 	out := fmt.Sprintf("%s  %s\n", sha(f.archives[toolName]), toolName)
 	if f.withBad {
-		out += fmt.Sprintf("%s  bad_1.0.0_linux_amd64.tar.gz\n", strings.Repeat("0", 64))
+		out += fmt.Sprintf("%s  %s\n", strings.Repeat("0", 64), badAsset())
 	}
 	return out
 }
@@ -135,9 +152,9 @@ func newFakeGitHub(t *testing.T, withBad bool) (*fakeGitHub, func()) {
 		tag: "v1.0.0", version: "1.0.0", withBad: withBad,
 		archives: map[string][]byte{},
 	}
-	f.archives["tool_1.0.0_linux_amd64.tar.gz"] = tarGz(t, "tool", "v1")
-	f.archives["tool_1.1.0_linux_amd64.tar.gz"] = tarGz(t, "tool-v2", "v2")
-	f.archives["bad_1.0.0_linux_amd64.tar.gz"] = tarGz(t, "bad", "bad")
+	f.archives[toolAsset("1.0.0")] = tarGz(t, "tool", "v1")
+	f.archives[toolAsset("1.1.0")] = tarGz(t, "tool-v2", "v2")
+	f.archives[badAsset()] = tarGz(t, "bad", "bad")
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/repos/acme/tool/releases/latest", func(w http.ResponseWriter, r *http.Request) {
@@ -205,7 +222,7 @@ func toolApp() config.App {
 	return config.App{
 		ID: "tool", Repo: "acme/tool", Channel: "latest",
 		Match: config.Match{Platforms: map[string]string{
-			"linux/amd64": "tool_{version}_linux_amd64.tar.gz",
+			hostKey(): matchPattern("tool"),
 		}},
 		Install: config.Install{Type: "archive", Link: "tool"},
 	}
@@ -229,7 +246,7 @@ func TestInstallCheckUpdateRollback(t *testing.T) {
 	if res.Version != "1.0.0" {
 		t.Errorf("version = %q", res.Version)
 	}
-	if res.SHA256 != sha(f.archives["tool_1.0.0_linux_amd64.tar.gz"]) {
+	if res.SHA256 != sha(f.archives[toolAsset("1.0.0")]) {
 		t.Errorf("sha256 = %q", res.SHA256)
 	}
 	data, err := os.ReadFile(filepath.Join(paths.BinDir, "tool"))
@@ -291,7 +308,7 @@ func TestInstallChecksumMismatch(t *testing.T) {
 	bad := config.App{
 		ID: "bad", Repo: "acme/tool", Channel: "latest",
 		Match: config.Match{Platforms: map[string]string{
-			"linux/amd64": "bad_1.0.0_linux_amd64.tar.gz",
+			hostKey(): badAsset(),
 		}},
 		Install: config.Install{Type: "archive", Bin: "bad"},
 	}
@@ -324,7 +341,7 @@ func TestAddGeneratesConfig(t *testing.T) {
 	if res.App.ID != "tool" || res.App.Repo != "acme/tool" {
 		t.Errorf("app = %+v", res.App)
 	}
-	if got := res.App.Match.Platforms["linux/amd64"]; got != "tool_{version}_linux_amd64.tar.gz" {
+	if got := res.App.Match.Platforms[hostKey()]; got != matchPattern("tool") {
 		t.Errorf("match = %q", got)
 	}
 	if res.App.Install.Type != "archive" {
@@ -370,7 +387,7 @@ func TestPinnedSkipsUpdates(t *testing.T) {
 
 func TestInstallVerifiesMinisignChecksums(t *testing.T) {
 	asset := tarGz(t, "signed", "payload")
-	assetName := "signed_1.0.0_linux_amd64.tar.gz"
+	assetName := signedAsset()
 	checksums := fmt.Sprintf("%s  %s\n", sha(asset), assetName)
 
 	pub, priv, err := ed25519.GenerateKey(rand.Reader)
@@ -418,7 +435,7 @@ func TestInstallVerifiesMinisignChecksums(t *testing.T) {
 
 	app := config.App{
 		ID: "signed", Repo: "acme/signed", Channel: "latest",
-		Match:   config.Match{Platforms: map[string]string{"linux/amd64": assetName}},
+		Match:   config.Match{Platforms: map[string]string{hostKey(): assetName}},
 		Install: config.Install{Type: "archive", Bin: "signed"},
 		Signature: signature.Config{
 			Type: "minisign", Key: pubFile, Mode: "required",
@@ -536,7 +553,7 @@ func TestPrivateRepoDownloadUsesToken(t *testing.T) {
 	if res.Err != nil {
 		t.Fatalf("private install: %v", res.Err)
 	}
-	if res.SHA256 != sha(f.archives["tool_1.0.0_linux_amd64.tar.gz"]) {
+	if res.SHA256 != sha(f.archives[toolAsset("1.0.0")]) {
 		t.Errorf("sha = %q", res.SHA256)
 	}
 	if _, err := os.ReadFile(filepath.Join(paths.BinDir, "tool")); err != nil {

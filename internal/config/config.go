@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -25,37 +26,59 @@ type Paths struct {
 	LogDir     string
 }
 
-// DefaultPaths computes XDG based paths, honouring GHPM_CONFIG.
+// DefaultPaths computes platform-appropriate paths. XDG_* variables win when
+// set; otherwise macOS uses ~/Library and other Unixes use the XDG defaults.
+// GHPM_CONFIG, GHPM_DATA_DIR and GHPM_BIN_DIR override everything.
 func DefaultPaths() Paths {
-	configHome := os.Getenv("XDG_CONFIG_HOME")
-	if configHome == "" {
-		configHome = filepath.Join(homeDir(), ".config")
-	}
-	dataHome := os.Getenv("XDG_DATA_HOME")
-	if dataHome == "" {
-		dataHome = filepath.Join(homeDir(), ".local", "share")
-	}
-	cacheHome := os.Getenv("XDG_CACHE_HOME")
-	if cacheHome == "" {
-		cacheHome = filepath.Join(homeDir(), ".cache")
-	}
-	stateHome := os.Getenv("XDG_STATE_HOME")
-	if stateHome == "" {
-		stateHome = filepath.Join(homeDir(), ".local", "state")
+	return defaultPaths(runtime.GOOS, homeDir(), os.Getenv)
+}
+
+func defaultPaths(goos, home string, getenv func(string) string) Paths {
+	configHome := getenv("XDG_CONFIG_HOME")
+	dataHome := getenv("XDG_DATA_HOME")
+	cacheHome := getenv("XDG_CACHE_HOME")
+	stateHome := getenv("XDG_STATE_HOME")
+
+	if goos == "darwin" {
+		if configHome == "" {
+			configHome = filepath.Join(home, "Library", "Application Support")
+		}
+		if dataHome == "" {
+			dataHome = filepath.Join(home, "Library", "Application Support")
+		}
+		if cacheHome == "" {
+			cacheHome = filepath.Join(home, "Library", "Caches")
+		}
+		if stateHome == "" {
+			stateHome = filepath.Join(home, "Library", "Logs")
+		}
+	} else {
+		if configHome == "" {
+			configHome = filepath.Join(home, ".config")
+		}
+		if dataHome == "" {
+			dataHome = filepath.Join(home, ".local", "share")
+		}
+		if cacheHome == "" {
+			cacheHome = filepath.Join(home, ".cache")
+		}
+		if stateHome == "" {
+			stateHome = filepath.Join(home, ".local", "state")
+		}
 	}
 
 	configDir := filepath.Join(configHome, "ghpm")
 	configFile := filepath.Join(configDir, "config.yaml")
-	if env := os.Getenv("GHPM_CONFIG"); env != "" {
+	if env := getenv("GHPM_CONFIG"); env != "" {
 		configFile = expandHome(env)
 		configDir = filepath.Dir(configFile)
 	}
 	dataDir := filepath.Join(dataHome, "ghpm")
-	if env := os.Getenv("GHPM_DATA_DIR"); env != "" {
+	if env := getenv("GHPM_DATA_DIR"); env != "" {
 		dataDir = expandHome(env)
 	}
-	binDir := filepath.Join(homeDir(), ".local", "bin")
-	if env := os.Getenv("GHPM_BIN_DIR"); env != "" {
+	binDir := filepath.Join(home, ".local", "bin")
+	if env := getenv("GHPM_BIN_DIR"); env != "" {
 		binDir = expandHome(env)
 	}
 	return Paths{
@@ -272,7 +295,7 @@ func (c *Config) Validate() error {
 			}
 		}
 		switch a.Install.Type {
-		case "", "binary", "archive", "deb", "rpm", "appimage", "script":
+		case "", "binary", "archive", "pkg", "deb", "rpm", "appimage", "script":
 		default:
 			return fmt.Errorf("app %q: unknown install.type %q", a.ID, a.Install.Type)
 		}

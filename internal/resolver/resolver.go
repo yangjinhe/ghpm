@@ -22,6 +22,8 @@ const (
 	FormatBinary    Format = "binary"
 	FormatDeb       Format = "deb"
 	FormatRPM       Format = "rpm"
+	FormatPkg       Format = "pkg"
+	FormatDmg       Format = "dmg"
 	FormatAppImage  Format = "appimage"
 	FormatChecksum  Format = "checksum"
 	FormatSignature Format = "signature"
@@ -62,14 +64,23 @@ func Classify(name string) Candidate {
 		switch c.Format {
 		case FormatDeb, FormatRPM, FormatAppImage:
 			c.OS = "linux"
+		case FormatPkg, FormatDmg:
+			c.OS = "darwin"
 		case FormatBinary:
 			if strings.HasSuffix(strings.ToLower(name), ".exe") {
 				c.OS = "windows"
 			}
 		}
 	}
-	if strings.Contains(strings.ToLower(name), "universal") && c.OS == "darwin" {
-		c.Arches = []string{"amd64", "arm64"}
+	if strings.Contains(strings.ToLower(name), "universal") {
+		// "universal" (universal2) is Apple's fat-binary naming; treat it as
+		// a macOS asset that matches both architectures.
+		if c.OS == "" {
+			c.OS = "darwin"
+		}
+		if c.OS == "darwin" {
+			c.Arches = []string{"amd64", "arm64"}
+		}
 	}
 	return c
 }
@@ -123,6 +134,10 @@ func classifyFormat(name string) Format {
 		return FormatDeb
 	case strings.HasSuffix(lower, ".rpm"):
 		return FormatRPM
+	case strings.HasSuffix(lower, ".pkg"):
+		return FormatPkg
+	case strings.HasSuffix(lower, ".dmg"):
+		return FormatDmg
 	case strings.HasSuffix(lower, ".appimage"):
 		return FormatAppImage
 	case platform.IsArchiveExt(lower):
@@ -145,6 +160,12 @@ func classifyFormat(name string) Format {
 func Score(name string, target platform.Platform, opts Options) (Candidate, bool) {
 	c := Classify(name)
 	if c.Format == FormatChecksum || c.Format == FormatSignature || c.Format == FormatOther {
+		return c, false
+	}
+	if c.Format == FormatDmg {
+		// Mounting and copying app bundles is not supported; expose the asset
+		// in `ghpm assets` but never select it for install.
+		c.Notes = append(c.Notes, "excluded:disk-image")
 		return c, false
 	}
 	if IsSourceAsset(name) {
@@ -189,6 +210,10 @@ func Score(name string, target platform.Platform, opts Options) (Candidate, bool
 		score += 6
 	case FormatBinary:
 		score += 4
+	case FormatPkg:
+		// Installer packages need sudo; prefer archives unless the app asks
+		// for the pkg type explicitly.
+		score += 2
 	case FormatAppImage:
 		score += 5
 	}
@@ -284,7 +309,7 @@ func pickTop(ranked []Candidate) (Candidate, bool) {
 
 func assetStem(name string) string {
 	lower := strings.ToLower(name)
-	for _, ext := range []string{".tar.gz", ".tgz", ".tar.xz", ".txz", ".tar.zst", ".tzst", ".tar.bz2", ".zip", ".tar", ".deb", ".rpm", ".appimage"} {
+	for _, ext := range []string{".tar.gz", ".tgz", ".tar.xz", ".txz", ".tar.zst", ".tzst", ".tar.bz2", ".zip", ".tar", ".deb", ".rpm", ".pkg", ".dmg", ".appimage"} {
 		if strings.HasSuffix(lower, ext) {
 			return name[:len(name)-len(ext)]
 		}
@@ -440,7 +465,7 @@ func Generate(names []string, target platform.Platform, tag, version, preferred 
 		for _, n := range names {
 			if strings.EqualFold(n, preferred) {
 				c := Classify(n)
-				if c.Format == FormatChecksum || c.Format == FormatSignature || c.Format == FormatOther {
+				if c.Format == FormatChecksum || c.Format == FormatSignature || c.Format == FormatOther || c.Format == FormatDmg {
 					return Generated{}, fmt.Errorf("asset %q is not installable", preferred)
 				}
 				chosen = c
@@ -463,7 +488,7 @@ func Generate(names []string, target platform.Platform, tag, version, preferred 
 	perPlatform := map[string][]Candidate{}
 	for _, n := range names {
 		c := Classify(n)
-		if c.Format == FormatChecksum || c.Format == FormatSignature || c.Format == FormatOther || IsSourceAsset(n) {
+		if c.Format == FormatChecksum || c.Format == FormatSignature || c.Format == FormatOther || c.Format == FormatDmg || IsSourceAsset(n) {
 			continue
 		}
 		if c.OS == "" || len(c.Arches) != 1 {

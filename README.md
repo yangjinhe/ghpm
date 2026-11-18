@@ -5,8 +5,9 @@
 > 配置一个仓库 → 自动识别架构/平台、选中正确的 release 资产 → 下载并校验 →
 > 安装到用户目录 → 之后一条命令检查更新、选择升级、随时回滚。
 
-面向 **Linux + 用户级安装**：默认不调用 `sudo`，不污染系统目录，所有文件都在
-`~/.local` 下。
+面向 **Linux + macOS、用户级安装**：默认不调用 `sudo`，不污染系统目录。
+Linux 上配置与状态在 `~/.config`、`~/.local`；macOS 上遵循系统惯例使用
+`~/Library`，软链仍在 `~/.local/bin`。
 
 ```
 ┌ ghpm ── linux/amd64 ─────────────── 5 apps · 2 updates ┐
@@ -54,7 +55,11 @@ cd /home/yangjh/aiproject
 make build          # 生成 ./ghpm
 make test           # 单元 + 离线集成测试
 sudo make install   # 安装到 /usr/local/bin（可选）
+make install PREFIX=$HOME/.local   # macOS 上更常见的用户级安装
 ```
+
+macOS 也可以直接交叉编译或使用 release 里的 `darwin_arm64`/`darwin_amd64`
+包；`go test ./...` 在 macOS 上同样通过（CI 有独立的 macos-latest 任务）。
 
 或者：
 
@@ -62,11 +67,13 @@ sudo make install   # 安装到 /usr/local/bin（可选）
 go build -o ghpm ./cmd/ghpm
 ```
 
-Release 页面提供 linux/amd64、linux/arm64 的 `tar.gz` 和 `.deb`：
+Release 页面提供 Linux 的 `tar.gz`/`.deb` 与 macOS 的 `tar.gz`（以下用
+`<version>` 代表实际版本号）：
 
 ```bash
-sudo dpkg -i ghpm_0.2.0_amd64.deb   # 安装到 /usr/bin，附带 man page
-tar -xzf ghpm_0.2.0_linux_amd64.tar.gz && ./ghpm_0.2.0_linux_amd64/ghpm --help
+sudo dpkg -i ghpm_<version>_amd64.deb   # Debian/Ubuntu，安装到 /usr/bin，附带 man page
+tar -xzf "ghpm_<version>_linux_amd64.tar.gz" && "./ghpm_<version>_linux_amd64/ghpm" --help
+tar -xzf "ghpm_<version>_darwin_arm64.tar.gz" && "./ghpm_<version>_darwin_arm64/ghpm" --help
 ```
 
 ## 快速开始
@@ -98,6 +105,21 @@ tar -xzf ghpm_0.2.0_linux_amd64.tar.gz && ./ghpm_0.2.0_linux_amd64/ghpm --help
 
 > 如果 `~/.local/bin` 不在 `PATH` 里，`ghpm doctor` 会提示；把它加进
 > `~/.bashrc` 或 `~/.zshrc`：`export PATH="$HOME/.local/bin:$PATH"`。
+
+### macOS
+
+- 配置与数据在 `~/Library/Application Support/ghpm`，缓存在
+  `~/Library/Caches/ghpm`，日志目录在 `~/Library/Logs/ghpm`；
+  可执行软链仍在 `~/.local/bin`。
+- 资产匹配支持 `darwin`/`macos`/`osx`/`apple-darwin`、`arm64`/`aarch64`/
+  `x86_64`/`x86_64h`，以及 `universal`/`universal2` 胖二进制。
+- `.pkg` 资产可配 `install.type: pkg`，通过 `sudo installer -pkg ... -target /`
+  安装；`.dmg` 不做自动挂载，`ghpm assets` 会把它标记为不可安装。
+- 安装、升级或回滚后会递归清除 `com.apple.quarantine` 扩展属性（原生 xattr
+  系统调用），避免 Gatekeeper 阻止运行下载的二进制；`.pkg` 由系统安装器处理。
+  清除属性不会为二进制重签名，未做 ad-hoc 签名/公证的 arm64 程序仍可能被
+  系统拒绝。
+- 自动检查更新可用 launchd，模板见下文。
 
 ### 私有仓库与自举
 
@@ -158,14 +180,16 @@ ghpm web --listen 127.0.0.1:9000
 
 ## 配置文件
 
-默认位置 `~/.config/ghpm/config.yaml`，可用 `GHPM_CONFIG` 或 `-c` 覆盖。
+默认位置：Linux 为 `~/.config/ghpm/config.yaml`，macOS 为
+`~/Library/Application Support/ghpm/config.yaml`。可用 `GHPM_CONFIG` 或
+`-c` 覆盖；设置了 `XDG_CONFIG_HOME` 时优先使用 XDG 路径。
 
 ```yaml
 version: 1
 
 defaults:
-  bin_dir: ~/.local/bin            # 软链目录
-  data_dir: ~/.local/share/ghpm    # 版本与状态
+  bin_dir: ~/.local/bin            # 软链目录（两个平台一致）
+  data_dir: ~/.local/share/ghpm    # 版本与状态（macOS 默认 ~/Library/Application Support/ghpm）
   verify: if-available             # required | if-available | skip
   prefer: gnu                      # Linux 上 gnu / musl 偏好
   concurrency: 4                   # 并发下载/检查
@@ -275,6 +299,7 @@ signature:
 | `binary` | 裸二进制；软链名默认使用 app 的 `id` |
 | `appimage` | 放入版本目录并加可执行权限 |
 | `deb` / `rpm` | 调用 `apt/dnf/zypper/rpm`，可配 `sudo: never|prompt` |
+| `pkg` | macOS：调用 `installer -pkg ... -target /`，可配 `sudo` |
 | `script` | 执行安装脚本，默认禁用，需 `allow_scripts: true` |
 
 `install.link` 可覆盖软链名；`install.bin` 指定可执行文件；`install.args`
@@ -283,22 +308,24 @@ signature:
 ## 目录与状态
 
 ```
-~/.local/share/ghpm/
+~/.local/share/ghpm/                # Linux；macOS 为 ~/Library/Application Support/ghpm
 ├── apps/<id>/<version>/...        # 每个版本独立目录
 ├── state.json                     # 安装记录（原子写 + 文件锁）
-└── cache/ (XDG_CACHE_HOME/ghpm)
+└── cache/ (XDG_CACHE_HOME/ghpm)   # macOS 为 ~/Library/Caches/ghpm
     ├── releases/<hash>.json       # ETag 元数据缓存
     ├── downloads/<id>/<ver>/...   # 已下载资产（重装不再联网）
     ├── checksums/<id>/<ver>/...   # 校验清单
     ├── signatures/<id>/<ver>/...  # 清单的分离签名
-    └── packages/                  # deb/rpm 缓存
+    └── packages/                  # deb/rpm/pkg 缓存
 ~/.local/bin/<name> -> ../share/ghpm/apps/<id>/<ver>/<file>
 ```
 
 ## 自动检查更新
 
-`ghpm check --notify` 在有更新时调用 `notify-send` 弹桌面通知，适合放进
-cron 或 systemd user timer。仓库内提供了可直接使用的模板：
+`ghpm check --notify` 在有更新时弹出桌面通知：Linux 使用 `notify-send`，
+macOS 使用 `osascript`。适合放进 cron、systemd user timer 或 launchd。
+
+Linux（systemd）模板：
 
 ```bash
 mkdir -p ~/.config/systemd/user
@@ -307,7 +334,23 @@ systemctl --user daemon-reload
 systemctl --user enable --now ghpm-check.timer
 ```
 
-token 放在 `~/.config/ghpm/env`（`GITHUB_TOKEN=...`，权限 600），服务会读取它。
+macOS（launchd）模板，每天检查一次：
+
+```bash
+mkdir -p ~/Library/Logs/ghpm ~/Library/LaunchAgents
+sed -e "s|__GHPM_BIN__|$HOME/.local/bin/ghpm|" \
+    -e "s|__LOG_DIR__|$HOME/Library/Logs/ghpm|" \
+    contrib/launchd/io.github.ghpm.check.plist \
+    > ~/Library/LaunchAgents/io.github.ghpm.check.plist
+launchctl bootstrap gui/$UID ~/Library/LaunchAgents/io.github.ghpm.check.plist
+launchctl kickstart -k gui/$UID/io.github.ghpm.check   # 立即运行一次
+```
+
+LaunchAgents 不继承 shell 环境，需要 token 时执行
+`launchctl setenv GITHUB_TOKEN ghp_xxx`（对当前登录会话生效）。
+
+Linux 上 token 也可以放在 `~/.config/ghpm/env`（`GITHUB_TOKEN=...`，权限 600），
+systemd 服务会读取它。
 
 也可以只用 cron：
 
@@ -326,7 +369,9 @@ ghpm completion bash > ~/.local/share/bash-completion/completions/ghpm
 
 ## 安全说明
 
-- 默认用户级安装，**不会隐式 sudo**；`deb/rpm` 需要显式配置且会提示。
+- 默认用户级安装，**不会隐式 sudo**；`deb/rpm/pkg` 需要显式配置且会提示。
+- 通过 ghpm 安装的文件会自动清除 macOS quarantine 属性；从浏览器获得的可执行
+  文件仍受 Gatekeeper 约束。
 - 私有仓库需要设置 `GITHUB_TOKEN`；资产通过 GitHub API 端点携带 token 下载，
   重定向到对象存储时会自动去掉 Authorization 头。
 - SHA-256 校验失败会删除下载文件并中止，旧版本和软链保持不变。
@@ -337,20 +382,23 @@ ghpm completion bash > ~/.local/share/bash-completion/completions/ghpm
 - 只允许 HTTPS；镜像前缀只拼接下载地址，不改变资产路径。
 - 安装脚本类型默认关闭。
 
-## 已知限制（v0.2）
+## 已知限制（v0.3）
 
 - 不做依赖解析、源码编译、GitHub Actions artifacts 安装。
 - 签名只覆盖 checksum 清单；不验证 cosign/Sigstore 的无密钥签名。
 - 不自动配置 shell 补全/桌面文件；软链名默认取 app id，可用 `install.link` 调整。
-- macOS/Windows 的安装路径与包类型未做专门适配（核心逻辑可复用）。
+- macOS：不支持 `.dmg` 自动挂载和 `.app` 安装（会跳过 `.dmg` 资产）；
+  `.pkg` 走系统 `installer`。ghpm 自身未做 Apple 代码签名/公证。
+- Windows 的安装路径与包类型未做专门适配（核心逻辑可复用）。
 - Web 界面面向本机单人使用，没有内置账号体系。
 
 ## 持续集成与发布
 
-- `.github/workflows/ci.yml`：每次推送/PR 运行 gofmt、vet、测试和 race 测试。
+- `.github/workflows/ci.yml`：每次推送/PR 在 Ubuntu 和 macOS 上分别运行
+  gofmt、vet、测试和 race 测试。
 - `.github/workflows/release.yml`：推送 `v*` 标签时自动交叉编译
-  linux/amd64、linux/arm64，附带 README、示例配置和 man page，
-  产出 tar.gz 与 `.deb`（含手册页），并上传各自的 sha256 到 Release。
+  linux/{amd64,arm64}、darwin/{amd64,arm64}，附带 README、示例配置和
+  man page；Linux 额外产出 `.deb`（含手册页），分别上传 sha256 到 Release。
 
 生成 man page：
 
@@ -361,7 +409,7 @@ make docs          # 输出到 docs/man/
 本地发布：
 
 ```bash
-make build VERSION=0.1.1
+make build VERSION=0.3.0
 ```
 
 ## 开发

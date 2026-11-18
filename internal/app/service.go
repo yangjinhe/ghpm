@@ -358,6 +358,7 @@ func (s *Service) InstallOne(ctx context.Context, id string, opts InstallOptions
 		opts.Progress.emit(Event{Kind: "error", ID: id, Err: err})
 		return res
 	}
+	res.Warnings = append(res.Warnings, ir.Warnings...)
 
 	rec := &state.AppState{
 		ID:            id,
@@ -852,6 +853,9 @@ func (s *Service) Rollback(id, toVersion string) (InstallResult, error) {
 	}
 	if err := installer.SwitchLink(rec.LinkPath, binAbs, true); err != nil {
 		return res, err
+	}
+	if _, err := installer.StripQuarantine(versionDir); err != nil {
+		res.Warnings = append(res.Warnings, fmt.Sprintf("could not clear macOS quarantine attribute: %v", err))
 	}
 	prev := rec.Version
 	rec.Version = target

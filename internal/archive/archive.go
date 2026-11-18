@@ -124,6 +124,9 @@ func extractTar(tr *tar.Reader, destDir string, strip int) ([]string, error) {
 		if err := validateEntryName(hdr.Name); err != nil {
 			return out, err
 		}
+		if isMacMetadata(hdr.Name) {
+			continue
+		}
 		rel, skip := entryPath(hdr.Name, strip)
 		if skip {
 			continue
@@ -191,6 +194,9 @@ func extractZip(path, destDir string, strip int) ([]string, error) {
 		if err := validateEntryName(f.Name); err != nil {
 			return out, err
 		}
+		if isMacMetadata(f.Name) {
+			continue
+		}
 		rel, skip := entryPath(f.Name, strip)
 		if skip {
 			continue
@@ -240,6 +246,22 @@ func extractZip(path, destDir string, strip int) ([]string, error) {
 		out = append(out, rel)
 	}
 	return out, nil
+}
+
+// isMacMetadata reports AppleDouble/resource-fork entries (__MACOSX, ._*)
+// and Finder metadata. They are never part of an installable payload and
+// would otherwise look like candidate binaries on macOS.
+func isMacMetadata(name string) bool {
+	n := strings.ReplaceAll(name, "\\", "/")
+	for _, part := range strings.Split(n, "/") {
+		switch {
+		case part == "__MACOSX", part == ".DS_Store":
+			return true
+		case strings.HasPrefix(part, "._"):
+			return true
+		}
+	}
+	return false
 }
 
 // validateEntryName rejects absolute paths, including Windows drive letters.
@@ -335,6 +357,9 @@ func FindBinary(dir, wanted string, hints ...string) (string, error) {
 			return nil
 		}
 		rel, _ := filepath.Rel(dir, p)
+		if isMacMetadata(rel) {
+			return nil
+		}
 		files = append(files, fileEntry{
 			path: p, rel: rel,
 			depth: strings.Count(rel, string(filepath.Separator)),

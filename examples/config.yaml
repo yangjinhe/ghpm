@@ -52,3 +52,13 @@ apps:
     #   type: gpg
     #   key: ~/.config/ghpm/keys/burntsushi.asc   # 公钥文件、内联公钥或指纹
     #   mode: required                            # if-available | required | skip
+
+  # macOS 上安装系统级 .pkg（会调用 sudo installer，需谨慎）
+  # - id: mac-tool
+  #   repo: owner/mac-tool
+  #   match:
+  #     darwin/arm64: "mac-tool-{version}-arm64.pkg"
+  #     darwin/amd64: "mac-tool-{version}-x86_64.pkg"
+  #   install:
+  #     type: pkg
+  #     sudo: prompt

@@ -24,6 +24,9 @@ func newRollbackCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			for _, w := range res.Warnings {
+				fmt.Fprintf(cmd.ErrOrStderr(), "warning: %s\n", w)
+			}
 			fmt.Fprintf(cmd.OutOrStdout(), "%s: %s -> %s\n", res.ID, res.Previous, res.Version)
 			return nil
 		},

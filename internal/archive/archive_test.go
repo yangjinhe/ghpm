@@ -195,3 +195,69 @@ func TestFindBinaryUsesHints(t *testing.T) {
 		t.Errorf("picked %q, want tool", bin)
 	}
 }
+
+func TestMacMetadataIgnored(t *testing.T) {
+	src := makeTarGz(t, []file{
+		{name: "tool", mode: 0o755, body: "#!/bin/sh\n"},
+		{name: "__MACOSX/._tool", mode: 0o644, body: "appledouble"},
+		{name: "._tool", mode: 0o644, body: "appledouble"},
+		{name: ".DS_Store", mode: 0o644, body: "finder"},
+		{name: "README.md", mode: 0o644, body: "docs"},
+	})
+	dest := t.TempDir()
+	if _, err := Extract(src, dest, 0); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range []string{"__MACOSX/._tool", "._tool", ".DS_Store"} {
+		if _, err := os.Stat(filepath.Join(dest, filepath.FromSlash(p))); !os.IsNotExist(err) {
+			t.Errorf("%s should not be extracted (err=%v)", p, err)
+		}
+	}
+	bin, err := FindBinary(dest, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if filepath.Base(bin) != "tool" {
+		t.Errorf("picked %q, want tool", bin)
+	}
+}
+
+func TestMacMetadataInZip(t *testing.T) {
+	var buf bytes.Buffer
+	zw := zip.NewWriter(&buf)
+	for _, f := range []file{
+		{name: "tool", mode: 0o755, body: "bin"},
+		{name: "__MACOSX/._tool", mode: 0o644, body: "meta"},
+	} {
+		hdr := &zip.FileHeader{Name: f.name, Method: zip.Deflate}
+		hdr.SetMode(os.FileMode(f.mode))
+		w, err := zw.CreateHeader(hdr)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := w.Write([]byte(f.body)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "a.zip")
+	if err := os.WriteFile(path, buf.Bytes(), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	dest := t.TempDir()
+	if _, err := Extract(path, dest, 0); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(dest, "__MACOSX")); !os.IsNotExist(err) {
+		t.Errorf("__MACOSX should not be extracted: %v", err)
+	}
+	bin, err := FindBinary(dest, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if filepath.Base(bin) != "tool" {
+		t.Errorf("picked %q, want tool", bin)
+	}
+}

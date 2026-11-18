@@ -160,3 +160,52 @@ func TestSignatureValidation(t *testing.T) {
 		t.Fatal("signature + verify: skip must be rejected")
 	}
 }
+
+func TestDefaultPathsPerOS(t *testing.T) {
+	emptyEnv := func(string) string { return "" }
+	home := "/Users/alice"
+	darwin := defaultPaths("darwin", home, emptyEnv)
+	if darwin.ConfigFile != "/Users/alice/Library/Application Support/ghpm/config.yaml" {
+		t.Errorf("darwin config = %q", darwin.ConfigFile)
+	}
+	if darwin.DataDir != "/Users/alice/Library/Application Support/ghpm" {
+		t.Errorf("darwin data = %q", darwin.DataDir)
+	}
+	if darwin.CacheDir != "/Users/alice/Library/Caches/ghpm" {
+		t.Errorf("darwin cache = %q", darwin.CacheDir)
+	}
+	if darwin.LogDir != "/Users/alice/Library/Logs/ghpm" {
+		t.Errorf("darwin log = %q", darwin.LogDir)
+	}
+	if darwin.BinDir != "/Users/alice/.local/bin" {
+		t.Errorf("darwin bin = %q", darwin.BinDir)
+	}
+
+	linux := defaultPaths("linux", "/home/alice", emptyEnv)
+	if linux.ConfigFile != "/home/alice/.config/ghpm/config.yaml" || linux.CacheDir != "/home/alice/.cache/ghpm" {
+		t.Errorf("linux paths = %+v", linux)
+	}
+
+	// Explicit XDG variables win on macOS too.
+	xdg := defaultPaths("darwin", home, func(k string) string {
+		if k == "XDG_CONFIG_HOME" {
+			return "/tmp/xdg-config"
+		}
+		return ""
+	})
+	if xdg.ConfigFile != "/tmp/xdg-config/ghpm/config.yaml" {
+		t.Errorf("XDG override = %q", xdg.ConfigFile)
+	}
+}
+
+func TestPkgInstallTypeAccepted(t *testing.T) {
+	cfg := DefaultsConfig(DefaultPaths())
+	cfg.Apps = []App{{ID: "pkged", Repo: "a/b", Install: Install{Type: "pkg"}}}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("pkg install type rejected: %v", err)
+	}
+	cfg.Apps[0].Install.Type = "dmg"
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("dmg install type should be rejected")
+	}
+}

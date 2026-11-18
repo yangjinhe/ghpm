@@ -10,6 +10,8 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"testing"
 
 	"ghpm/internal/config"
@@ -166,5 +168,87 @@ func TestBinaryInstallUsesAppIDAsLink(t *testing.T) {
 	data, err := os.ReadFile(filepath.Join(root, "bin", "mytool"))
 	if err != nil || len(data) == 0 {
 		t.Errorf("link content: %v", err)
+	}
+}
+
+func TestPkgInstallUsesMacOSInstaller(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("install.type pkg is macOS only")
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("fake flat package"))
+	}))
+	defer srv.Close()
+	root := t.TempDir()
+	var got []string
+	fetcher, _ := download.New("")
+	req := Request{
+		App:       config.App{ID: "pkgtool", Repo: "acme/pkgtool", Install: config.Install{Type: "pkg"}},
+		Tag:       "v1.0.0",
+		Version:   "1.0.0",
+		AssetName: "pkgtool_1.0.0_darwin_arm64.pkg",
+		AssetURL:  srv.URL,
+		DataDir:   filepath.Join(root, "data"),
+		BinDir:    filepath.Join(root, "bin"),
+		CacheDir:  filepath.Join(root, "cache"),
+		PruneKeep: 2,
+		SudoRunner: func(ctx context.Context, name string, args ...string) error {
+			got = append([]string{name}, args...)
+			return nil
+		},
+	}
+	res, err := Install(context.Background(), fetcher, req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Type != "pkg" {
+		t.Errorf("type = %q", res.Type)
+	}
+	idx := -1
+	for i, a := range got {
+		if a == "installer" {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		t.Fatalf("installer not invoked: %v", got)
+	}
+	args := got[idx+1:]
+	want := []string{"-pkg", filepath.Join(root, "cache", "packages", req.AssetName), "-target", "/"}
+	if len(args) != len(want) {
+		t.Fatalf("args = %v, want %v", args, want)
+	}
+	for i := range want {
+		if args[i] != want[i] {
+			t.Errorf("args = %v, want %v", args, want)
+			break
+		}
+	}
+}
+
+func TestPkgInstallRejectedOffMacOS(t *testing.T) {
+	if runtime.GOOS == "darwin" {
+		t.Skip("this checks the non-macOS error path")
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("package"))
+	}))
+	defer srv.Close()
+	root := t.TempDir()
+	fetcher, _ := download.New("")
+	req := Request{
+		App:       config.App{ID: "pkgtool", Repo: "acme/pkgtool", Install: config.Install{Type: "pkg"}},
+		Tag:       "v1.0.0",
+		Version:   "1.0.0",
+		AssetName: "pkgtool_1.0.0_darwin_arm64.pkg",
+		AssetURL:  srv.URL,
+		DataDir:   filepath.Join(root, "data"),
+		BinDir:    filepath.Join(root, "bin"),
+		CacheDir:  filepath.Join(root, "cache"),
+		PruneKeep: 2,
+	}
+	if _, err := Install(context.Background(), fetcher, req); err == nil || !strings.Contains(err.Error(), "macOS") {
+		t.Fatalf("want macOS-only error, got %v", err)
 	}
 }
