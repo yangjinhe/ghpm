@@ -100,7 +100,10 @@ func Install(ctx context.Context, fetcher *download.Fetcher, req Request) (res R
 	// not hit the network again. The version directory only receives the
 	// unpacked result.
 	assetFile := filepath.Join(req.CacheDir, "downloads", req.App.ID, ver, filepath.Base(req.AssetName))
-	if typeName == "deb" || typeName == "rpm" {
+	switch typeName {
+	case "deb", "rpm", "pkg":
+		// System package formats share one cache; they are not extracted into
+		// a version directory.
 		assetFile = filepath.Join(req.CacheDir, "packages", filepath.Base(req.AssetName))
 	}
 	sum, err := fetcher.Fetch(ctx, download.Options{
