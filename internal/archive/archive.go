@@ -137,6 +137,9 @@ func extractTar(tr *tar.Reader, destDir string, strip int) ([]string, error) {
 		}
 		switch hdr.Typeflag {
 		case tar.TypeDir:
+			if err := ensureNoSymlinkParents(destDir, dest); err != nil {
+				return out, err
+			}
 			if err := os.MkdirAll(dest, 0o755); err != nil {
 				return out, err
 			}
@@ -144,6 +147,9 @@ func extractTar(tr *tar.Reader, destDir string, strip int) ([]string, error) {
 			total += hdr.Size
 			if total > maxBytes {
 				return out, errors.New("archive exceeds size limit")
+			}
+			if err := ensureNoSymlinkParents(destDir, dest); err != nil {
+				return out, err
 			}
 			if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
 				return out, err
@@ -168,10 +174,45 @@ func extractTar(tr *tar.Reader, destDir string, strip int) ([]string, error) {
 				return out, fmt.Errorf("%s: truncated entry", rel)
 			}
 			out = append(out, rel)
-		case tar.TypeSymlink, tar.TypeLink:
-			// Symlinks (including hardlinks) are skipped: release binaries
-			// never need them and they are the usual escape vector.
-			continue
+		case tar.TypeSymlink:
+			if err := ensureNoSymlinkParents(destDir, dest); err != nil {
+				return out, err
+			}
+			if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
+				return out, err
+			}
+			if err := checkLinkTarget(destDir, dest, hdr.Linkname); err != nil {
+				return out, err
+			}
+			_ = os.Remove(dest)
+			if err := os.Symlink(hdr.Linkname, dest); err != nil {
+				return out, err
+			}
+			out = append(out, rel)
+		case tar.TypeLink:
+			if err := ensureNoSymlinkParents(destDir, dest); err != nil {
+				return out, err
+			}
+			if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
+				return out, err
+			}
+			linkRel, skip := entryPath(hdr.Linkname, strip)
+			if skip {
+				continue
+			}
+			linkDest, err := safeJoin(destDir, linkRel)
+			if err != nil {
+				return out, err
+			}
+			info, err := os.Lstat(linkDest)
+			if err != nil || !info.Mode().IsRegular() {
+				return out, fmt.Errorf("%s: hardlink target %q is missing", rel, hdr.Linkname)
+			}
+			_ = os.Remove(dest)
+			if err := os.Link(linkDest, dest); err != nil {
+				return out, err
+			}
+			out = append(out, rel)
 		default:
 			continue
 		}
@@ -206,14 +247,49 @@ func extractZip(path, destDir string, strip int) ([]string, error) {
 			return out, err
 		}
 		if f.FileInfo().IsDir() {
+			if err := ensureNoSymlinkParents(destDir, dest); err != nil {
+				return out, err
+			}
 			if err := os.MkdirAll(dest, 0o755); err != nil {
 				return out, err
 			}
 			continue
 		}
 		mode := f.Mode()
+		if mode&os.ModeSymlink != 0 {
+			if err := ensureNoSymlinkParents(destDir, dest); err != nil {
+				return out, err
+			}
+			if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
+				return out, err
+			}
+			rc, err := f.Open()
+			if err != nil {
+				return out, err
+			}
+			target, err := io.ReadAll(io.LimitReader(rc, 4097))
+			rc.Close()
+			if err != nil {
+				return out, err
+			}
+			if len(target) > 4096 {
+				return out, fmt.Errorf("%s: symlink target is too long", rel)
+			}
+			if err := checkLinkTarget(destDir, dest, string(target)); err != nil {
+				return out, err
+			}
+			_ = os.Remove(dest)
+			if err := os.Symlink(string(target), dest); err != nil {
+				return out, err
+			}
+			out = append(out, rel)
+			continue
+		}
 		if !mode.IsRegular() {
-			continue // symlink or device
+			continue // device, socket, pipe
+		}
+		if err := ensureNoSymlinkParents(destDir, dest); err != nil {
+			return out, err
 		}
 		total += int64(f.UncompressedSize64)
 		if total > maxBytes {
@@ -262,6 +338,56 @@ func isMacMetadata(name string) bool {
 		}
 	}
 	return false
+}
+
+// ensureNoSymlinkParents refuses to write through a symlink that an earlier
+// archive entry created. Without this check a malicious archive could point
+// a directory symlink at /etc and then write files through it.
+func ensureNoSymlinkParents(root, dest string) error {
+	rel, err := filepath.Rel(root, filepath.Dir(dest))
+	if err != nil {
+		return err
+	}
+	if rel == "." || rel == "" {
+		return nil
+	}
+	cur := root
+	for _, part := range strings.Split(rel, string(filepath.Separator)) {
+		if part == "" || part == "." {
+			continue
+		}
+		cur = filepath.Join(cur, part)
+		info, err := os.Lstat(cur)
+		if errors.Is(err, os.ErrNotExist) {
+			return nil // the remaining components will be created as real dirs
+		}
+		if err != nil {
+			return err
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("archive entry writes through symlink: %s", cur)
+		}
+	}
+	return nil
+}
+
+// checkLinkTarget rejects absolute targets and targets that resolve outside
+// root. App bundles legitimately use relative symlinks (frameworks), so they
+// are preserved rather than skipped.
+func checkLinkTarget(root, linkPath, target string) error {
+	if target == "" {
+		return fmt.Errorf("symlink %s has an empty target", linkPath)
+	}
+	norm := strings.ReplaceAll(target, "\\", "/")
+	if strings.HasPrefix(norm, "/") || filepath.IsAbs(target) {
+		return fmt.Errorf("symlink %s has an absolute target %q", linkPath, target)
+	}
+	resolved := filepath.Clean(filepath.Join(filepath.Dir(linkPath), filepath.FromSlash(norm)))
+	rootClean := filepath.Clean(root)
+	if resolved != rootClean && !strings.HasPrefix(resolved, rootClean+string(filepath.Separator)) {
+		return fmt.Errorf("symlink %s escapes destination: %q", linkPath, target)
+	}
+	return nil
 }
 
 // validateEntryName rejects absolute paths, including Windows drive letters.
@@ -336,6 +462,138 @@ var documentExts = map[string]bool{
 var scriptExts = map[string]bool{
 	".sh": true, ".bash": true, ".zsh": true, ".fish": true,
 	".ps1": true, ".bat": true, ".cmd": true,
+}
+
+// FindAppBundle locates a macOS application bundle. It prefers the shallowest
+// directory ending in .app that contains Contents/Info.plist and a
+// Contents/MacOS directory. ok is false when the tree has no bundle. When
+// several bundles sit at the same depth, hints (app id, asset name) pick the
+// matching one; otherwise the choice is reported as ambiguous.
+func FindAppBundle(dir string, hints ...string) (path string, ok bool, err error) {
+	type candidate struct {
+		path  string
+		rel   string
+		depth int
+	}
+	var found []candidate
+	err = filepath.WalkDir(dir, func(p string, d os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if !d.IsDir() || !strings.HasSuffix(d.Name(), ".app") {
+			return nil
+		}
+		if _, err := os.Stat(filepath.Join(p, "Contents", "Info.plist")); err != nil {
+			return nil
+		}
+		if info, err := os.Stat(filepath.Join(p, "Contents", "MacOS")); err != nil || !info.IsDir() {
+			return nil
+		}
+		rel, err := filepath.Rel(dir, p)
+		if err != nil {
+			return err
+		}
+		found = append(found, candidate{path: p, rel: rel, depth: strings.Count(rel, string(filepath.Separator))})
+		return nil
+	})
+	if err != nil {
+		return "", false, err
+	}
+	if len(found) == 0 {
+		return "", false, nil
+	}
+	sort.SliceStable(found, func(i, j int) bool { return found[i].depth < found[j].depth })
+	top := found[0].depth
+	var tied []candidate
+	for _, c := range found {
+		if c.depth == top {
+			tied = append(tied, c)
+		}
+	}
+	if len(tied) == 1 {
+		return tied[0].path, true, nil
+	}
+	for _, hint := range hints {
+		name := bundleHint(hint)
+		if name == "" {
+			continue
+		}
+		var matches []candidate
+		for _, c := range tied {
+			if bundleHint(filepath.Base(c.path)) == name {
+				matches = append(matches, c)
+			}
+		}
+		if len(matches) == 1 {
+			return matches[0].path, true, nil
+		}
+	}
+	return "", true, fmt.Errorf("archive contains several application bundles (%s); set install.type/install.bin",
+		filepath.ToSlash(tied[0].rel)+", "+filepath.ToSlash(tied[1].rel))
+}
+
+func bundleHint(s string) string {
+	return strings.TrimSuffix(strings.ToLower(strings.TrimSpace(filepath.Base(s))), ".app")
+}
+
+// MakeAppBundleExecutable restores execute bits on the bundle's main
+// executables. ZIP archives created on non-Unix hosts sometimes lose them,
+// which stops LaunchServices from starting the app.
+func MakeAppBundleExecutable(bundle string) error {
+	macosDir := filepath.Join(bundle, "Contents", "MacOS")
+	entries, err := os.ReadDir(macosDir)
+	if err != nil {
+		return fmt.Errorf("read %s: %w", macosDir, err)
+	}
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		info, err := e.Info()
+		if err != nil || !info.Mode().IsRegular() {
+			continue
+		}
+		if err := os.Chmod(filepath.Join(macosDir, e.Name()), 0o755); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// HasExecutableOutside reports whether dir has an executable regular file
+// outside the bundle. Such archives usually ship a CLI alongside the app and
+// should keep the CLI install behaviour.
+func HasExecutableOutside(dir, bundle string) (bool, error) {
+	bundleRel, err := filepath.Rel(dir, bundle)
+	if err != nil {
+		return false, err
+	}
+	found := false
+	err = filepath.WalkDir(dir, func(p string, d os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if d.IsDir() {
+			return nil
+		}
+		rel, err := filepath.Rel(dir, p)
+		if err != nil {
+			return err
+		}
+		if rel == bundleRel || strings.HasPrefix(rel, bundleRel+string(filepath.Separator)) || isMacMetadata(rel) {
+			return nil
+		}
+		info, err := d.Info()
+		if err != nil || !info.Mode().IsRegular() {
+			return nil
+		}
+		if info.Mode().Perm()&0o111 != 0 {
+			found = true
+			return filepath.SkipAll
+		}
+		return nil
+	})
+	return found, err
 }
 
 // FindBinary locates the executable a user means. When wanted is set it is

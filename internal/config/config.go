@@ -22,6 +22,7 @@ type Paths struct {
 	DataDir    string
 	CacheDir   string
 	BinDir     string
+	AppsDir    string // macOS: where .app bundle links live
 	StateFile  string
 	LogDir     string
 }
@@ -81,12 +82,20 @@ func defaultPaths(goos, home string, getenv func(string) string) Paths {
 	if env := getenv("GHPM_BIN_DIR"); env != "" {
 		binDir = expandHome(env)
 	}
+	appsDir := ""
+	if goos == "darwin" {
+		appsDir = "/Applications"
+	}
+	if env := getenv("GHPM_APPS_DIR"); env != "" {
+		appsDir = expandHome(env)
+	}
 	return Paths{
 		ConfigDir:  configDir,
 		ConfigFile: configFile,
 		DataDir:    dataDir,
 		CacheDir:   filepath.Join(cacheHome, "ghpm"),
 		BinDir:     binDir,
+		AppsDir:    appsDir,
 		StateFile:  filepath.Join(dataDir, "state.json"),
 		LogDir:     filepath.Join(stateHome, "ghpm"),
 	}
@@ -113,6 +122,7 @@ type Config struct {
 type Defaults struct {
 	BinDir      string `yaml:"bin_dir,omitempty"`
 	DataDir     string `yaml:"data_dir,omitempty"`
+	AppsDir     string `yaml:"apps_dir,omitempty"`    // macOS .app link directory
 	Verify      string `yaml:"verify,omitempty"`      // required | if-available | skip
 	Prefer      string `yaml:"prefer,omitempty"`      // gnu | musl
 	Prerelease  bool   `yaml:"prerelease,omitempty"`  // default channel for new apps
@@ -182,6 +192,7 @@ func DefaultsConfig(paths Paths) *Config {
 		Defaults: Defaults{
 			BinDir:      paths.BinDir,
 			DataDir:     paths.DataDir,
+			AppsDir:     paths.AppsDir,
 			Verify:      "if-available",
 			Prefer:      "gnu",
 			Concurrency: 4,
@@ -232,6 +243,9 @@ func applyDefaults(c *Config) {
 	if d.DataDir == "" {
 		d.DataDir = c.Source.DataDir
 	}
+	if d.AppsDir == "" {
+		d.AppsDir = c.Source.AppsDir
+	}
 	if d.Verify == "" {
 		d.Verify = "if-available"
 	}
@@ -252,17 +266,22 @@ func applyDefaults(c *Config) {
 	}
 	d.BinDir = expandHome(d.BinDir)
 	d.DataDir = expandHome(d.DataDir)
+	d.AppsDir = expandHome(d.AppsDir)
 }
 
 // ExpandPaths fills unset per-app values.
 func (c *Config) ExpandPaths() {
 	c.Defaults.BinDir = expandHome(c.Defaults.BinDir)
 	c.Defaults.DataDir = expandHome(c.Defaults.DataDir)
+	c.Defaults.AppsDir = expandHome(c.Defaults.AppsDir)
 	if c.Defaults.BinDir == "" {
 		c.Defaults.BinDir = c.Source.BinDir
 	}
 	if c.Defaults.DataDir == "" {
 		c.Defaults.DataDir = c.Source.DataDir
+	}
+	if c.Defaults.AppsDir == "" {
+		c.Defaults.AppsDir = c.Source.AppsDir
 	}
 }
 
@@ -295,7 +314,7 @@ func (c *Config) Validate() error {
 			}
 		}
 		switch a.Install.Type {
-		case "", "binary", "archive", "pkg", "deb", "rpm", "appimage", "script":
+		case "", "binary", "archive", "app", "pkg", "dmg", "deb", "rpm", "appimage", "script":
 		default:
 			return fmt.Errorf("app %q: unknown install.type %q", a.ID, a.Install.Type)
 		}

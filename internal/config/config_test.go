@@ -205,7 +205,41 @@ func TestPkgInstallTypeAccepted(t *testing.T) {
 		t.Fatalf("pkg install type rejected: %v", err)
 	}
 	cfg.Apps[0].Install.Type = "dmg"
-	if err := cfg.Validate(); err == nil {
-		t.Fatal("dmg install type should be rejected")
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("dmg install type rejected: %v", err)
+	}
+}
+
+func TestAppsDirDefaults(t *testing.T) {
+	emptyEnv := func(string) string { return "" }
+	darwin := defaultPaths("darwin", "/Users/alice", emptyEnv)
+	if darwin.AppsDir != "/Applications" {
+		t.Errorf("darwin apps dir = %q", darwin.AppsDir)
+	}
+	linux := defaultPaths("linux", "/home/alice", emptyEnv)
+	if linux.AppsDir != "" {
+		t.Errorf("linux apps dir = %q, want empty", linux.AppsDir)
+	}
+	override := defaultPaths("darwin", "/Users/alice", func(k string) string {
+		if k == "GHPM_APPS_DIR" {
+			return "/Volumes/External/Applications"
+		}
+		return ""
+	})
+	if override.AppsDir != "/Volumes/External/Applications" {
+		t.Errorf("GHPM_APPS_DIR override = %q", override.AppsDir)
+	}
+
+	cfg := DefaultsConfig(darwin)
+	if cfg.Defaults.AppsDir != "/Applications" {
+		t.Errorf("defaults config apps dir = %q", cfg.Defaults.AppsDir)
+	}
+}
+
+func TestAppInstallTypeAccepted(t *testing.T) {
+	cfg := DefaultsConfig(DefaultPaths())
+	cfg.Apps = []App{{ID: "gui", Repo: "a/b", Install: Install{Type: "app"}}}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("app install type rejected: %v", err)
 	}
 }

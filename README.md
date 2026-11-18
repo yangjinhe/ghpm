@@ -113,8 +113,18 @@ tar -xzf "ghpm_<version>_darwin_arm64.tar.gz" && "./ghpm_<version>_darwin_arm64/
   可执行软链仍在 `~/.local/bin`。
 - 资产匹配支持 `darwin`/`macos`/`osx`/`apple-darwin`、`arm64`/`aarch64`/
   `x86_64`/`x86_64h`，以及 `universal`/`universal2` 胖二进制。
+- `.app` 应用包会自动识别（zip/tar 中只有 bundle 时，例如
+  [motty](https://github.com/t8y2/motty)）：各版本保存在数据目录，
+  `/Applications/Motty.app` 是指向当前版本的软链；升级/回滚原子切换软链，
+  `ghpm remove` 会删除该链接和所有版本。目录可用 `defaults.apps_dir` 或
+  `GHPM_APPS_DIR` 调整；`/Applications` 不可写时回退到 `~/Applications`
+  并给出 warning。归档同时包含 CLI 和 `.app` 时仍按 CLI 安装，可用
+  `install.type: app` 或 `install.bin` 改变选择。
+- 只有 `.dmg` 时也能安装：只读挂载镜像，用 `ditto` 把其中的 `.app` 复制到
+  版本目录，再创建 `apps_dir` 软链，卸载时自动 detach 镜像。release 同时
+  提供 zip/tar.gz 时优先使用归档（更快，不需要挂载）。
 - `.pkg` 资产可配 `install.type: pkg`，通过 `sudo installer -pkg ... -target /`
-  安装；`.dmg` 不做自动挂载，`ghpm assets` 会把它标记为不可安装。
+  安装。
 - 安装、升级或回滚后会递归清除 `com.apple.quarantine` 扩展属性（原生 xattr
   系统调用），避免 Gatekeeper 阻止运行下载的二进制；`.pkg` 由系统安装器处理。
   清除属性不会为二进制重签名，未做 ad-hoc 签名/公证的 arm64 程序仍可能被
@@ -190,6 +200,7 @@ version: 1
 defaults:
   bin_dir: ~/.local/bin            # 软链目录（两个平台一致）
   data_dir: ~/.local/share/ghpm    # 版本与状态（macOS 默认 ~/Library/Application Support/ghpm）
+  apps_dir: ""                     # macOS .app 软链目录，默认 /Applications
   verify: if-available             # required | if-available | skip
   prefer: gnu                      # Linux 上 gnu / musl 偏好
   concurrency: 4                   # 并发下载/检查
@@ -295,8 +306,10 @@ signature:
 
 | type | 行为 |
 |---|---|
-| `archive` | 解压 tar.gz / tar.xz / tar.zst / zip，按 `bin` 找可执行文件；`strip_components` 可调 |
+| `archive` | 解压 tar.gz / tar.xz / tar.zst / zip，按 `bin` 找可执行文件；`strip_components` 可调。归档里只有 `.app` 时自动按应用包安装 |
 | `binary` | 裸二进制；软链名默认使用 app 的 `id` |
+| `app` | macOS：把 `.app` 安装到版本目录并软链到 `apps_dir`（默认 `/Applications`） |
+| `dmg` | macOS：只读挂载磁盘镜像，用 `ditto` 取出其中的 `.app` 后按应用包安装 |
 | `appimage` | 放入版本目录并加可执行权限 |
 | `deb` / `rpm` | 调用 `apt/dnf/zypper/rpm`，可配 `sudo: never|prompt` |
 | `pkg` | macOS：调用 `installer -pkg ... -target /`，可配 `sudo` |
@@ -318,6 +331,7 @@ signature:
     ├── signatures/<id>/<ver>/...  # 清单的分离签名
     └── packages/                  # deb/rpm/pkg 缓存
 ~/.local/bin/<name> -> ../share/ghpm/apps/<id>/<ver>/<file>
+/Applications/<Name>.app -> ~/Library/Application Support/ghpm/apps/<id>/<ver>/<Name>.app
 ```
 
 ## 自动检查更新
@@ -377,7 +391,9 @@ ghpm completion bash > ~/.local/share/bash-completion/completions/ghpm
 - SHA-256 校验失败会删除下载文件并中止，旧版本和软链保持不变。
 - 可选的清单签名校验在哈希校验之前执行；签名不匹配直接中止安装。
 - Web 界面默认只绑定回环地址，校验 Host 头，写操作强制 JSON。
-- 解包拒绝绝对路径、`..` 穿越和符号链接条目。
+- 解包拒绝绝对路径、`..` 穿越和越界符号链接；相对符号链接只有在解析后仍
+  位于解包目录内时才保留（macOS `.app` 的 framework 链接需要），任何通过
+  符号链接写入后续条目的归档都会被拒绝。
 - Token 只从环境变量读取，不写入配置或日志。
 - 只允许 HTTPS；镜像前缀只拼接下载地址，不改变资产路径。
 - 安装脚本类型默认关闭。
@@ -387,8 +403,9 @@ ghpm completion bash > ~/.local/share/bash-completion/completions/ghpm
 - 不做依赖解析、源码编译、GitHub Actions artifacts 安装。
 - 签名只覆盖 checksum 清单；不验证 cosign/Sigstore 的无密钥签名。
 - 不自动配置 shell 补全/桌面文件；软链名默认取 app id，可用 `install.link` 调整。
-- macOS：不支持 `.dmg` 自动挂载和 `.app` 安装（会跳过 `.dmg` 资产）；
-  `.pkg` 走系统 `installer`。ghpm 自身未做 Apple 代码签名/公证。
+- macOS：`.app` 以软链方式放入 `/Applications`（或配置的 `apps_dir`），不复制
+  整个 bundle；`.dmg` 仅支持其中包含 `.app` 的镜像，镜像内仅有 `.pkg` 时仍
+  需手工安装。ghpm 自身未做 Apple 代码签名/公证。
 - Windows 的安装路径与包类型未做专门适配（核心逻辑可复用）。
 - Web 界面面向本机单人使用，没有内置账号体系。
 
@@ -399,6 +416,8 @@ ghpm completion bash > ~/.local/share/bash-completion/completions/ghpm
 - `.github/workflows/release.yml`：推送 `v*` 标签时自动交叉编译
   linux/{amd64,arm64}、darwin/{amd64,arm64}，附带 README、示例配置和
   man page；Linux 额外产出 `.deb`（含手册页），分别上传 sha256 到 Release。
+  构建与发布分成两个作业，发布说明直接取 `CHANGELOG.md` 对应版本章节，
+  并附上 previous tag 的 compare 链接。
 
 生成 man page：
 

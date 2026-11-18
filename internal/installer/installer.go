@@ -36,6 +36,7 @@ type Request struct {
 	SHA256     string
 	DataDir    string
 	BinDir     string
+	AppsDir    string
 	CacheDir   string
 	Proxy      string
 	Prefix     string
@@ -84,6 +85,12 @@ func Install(ctx context.Context, fetcher *download.Fetcher, req Request) (res R
 	if typeName == "" {
 		typeName = inferType(req.AssetName)
 	}
+	if typeName == "app" && strings.HasSuffix(strings.ToLower(req.AssetName), ".dmg") {
+		typeName = "dmg"
+	}
+	if typeName == "dmg" && runtime.GOOS != "darwin" {
+		return res, errors.New("install.type dmg is only supported on macOS")
+	}
 
 	appDir := filepath.Join(req.DataDir, "apps", req.App.ID)
 	if err := os.MkdirAll(appDir, 0o755); err != nil {
@@ -126,10 +133,41 @@ func Install(ctx context.Context, fetcher *download.Fetcher, req Request) (res R
 
 	// Build the version directory contents in tmpDir.
 	var binRel string
+	appMode := false
 	switch typeName {
-	case "archive":
+	case "archive", "app":
 		if _, err := archive.Extract(assetFile, tmpDir, req.App.Install.Stripping); err != nil {
 			return res, fmt.Errorf("extract %s: %w", req.AssetName, err)
+		}
+		bundle, hasBundle, err := archive.FindAppBundle(tmpDir, req.App.ID, req.AssetName)
+		if err != nil {
+			return res, err
+		}
+		switch {
+		case typeName == "app":
+			if !hasBundle {
+				return res, fmt.Errorf("install.type app: %s does not contain a .app bundle", req.AssetName)
+			}
+			appMode = true
+		case hasBundle:
+			// Only take over when the bundle is the sole payload; archives
+			// that also ship a CLI binary keep the normal install path.
+			// install.bin is an explicit request for a CLI inside the bundle.
+			if req.App.Install.Bin != "" {
+				break
+			}
+			outside, err := archive.HasExecutableOutside(tmpDir, bundle)
+			if err != nil {
+				return res, err
+			}
+			appMode = !outside
+		}
+		if appMode {
+			binRel, err = filepath.Rel(tmpDir, bundle)
+			if err != nil {
+				return res, err
+			}
+			break
 		}
 		bin, err := archive.FindBinary(tmpDir, req.App.Install.Bin, req.App.ID, req.AssetName)
 		if err != nil {
@@ -161,7 +199,16 @@ func Install(ctx context.Context, fetcher *download.Fetcher, req Request) (res R
 		res.Type = typeName
 		return res, nil
 	case "dmg":
-		return res, errors.New("install.type dmg is not supported; mount it manually or configure an archive/pkg asset")
+		bundle, warnings, err := installDMG(ctx, assetFile, tmpDir, req.App.ID, req.AssetName)
+		if err != nil {
+			return res, err
+		}
+		res.Warnings = append(res.Warnings, warnings...)
+		appMode = true
+		binRel, err = filepath.Rel(tmpDir, bundle)
+		if err != nil {
+			return res, err
+		}
 	case "script":
 		if !req.App.Install.AllowScript {
 			return res, errors.New("script installs are disabled; set install.allow_scripts: true to opt in")
@@ -174,6 +221,12 @@ func Install(ctx context.Context, fetcher *download.Fetcher, req Request) (res R
 		return res, nil
 	default:
 		return res, fmt.Errorf("unknown install type %q", typeName)
+	}
+
+	if appMode {
+		if err := archive.MakeAppBundleExecutable(filepath.Join(tmpDir, binRel)); err != nil {
+			return res, err
+		}
 	}
 
 	// Swap in the new version directory.
@@ -193,6 +246,9 @@ func Install(ctx context.Context, fetcher *download.Fetcher, req Request) (res R
 	linkName := req.App.Install.Link
 	if linkName == "" {
 		switch {
+		case appMode:
+			// Keep the bundle name, e.g. Motty.app.
+			linkName = filepath.Base(binRel)
 		case req.App.Install.Bin != "":
 			linkName = filepath.Base(req.App.Install.Bin)
 		case typeName == "archive":
@@ -208,6 +264,14 @@ func Install(ctx context.Context, fetcher *download.Fetcher, req Request) (res R
 		linkName = req.App.ID
 	}
 	linkPath := filepath.Join(req.BinDir, linkName)
+	if appMode {
+		dir, warnings, err := prepareAppsDir(req.AppsDir)
+		if err != nil {
+			return res, err
+		}
+		res.Warnings = append(res.Warnings, warnings...)
+		linkPath = filepath.Join(dir, linkName)
+	}
 	if err := makeSymlink(linkPath, binAbs, req.Force); err != nil {
 		return res, err
 	}
@@ -217,6 +281,9 @@ func Install(ctx context.Context, fetcher *download.Fetcher, req Request) (res R
 	res.Tag = req.Tag
 	res.Asset = req.AssetName
 	res.Type = typeName
+	if appMode {
+		res.Type = "app"
+	}
 	res.BinPath = binAbs
 	res.BinRel = binRel
 	res.LinkPath = linkPath
@@ -266,8 +333,13 @@ func makeSymlink(linkPath, target string, force bool) error {
 		return err
 	}
 	if info, err := os.Lstat(linkPath); err == nil {
-		if info.Mode()&os.ModeSymlink == 0 && !force {
-			return fmt.Errorf("%w: %s (use --force to replace)", ErrExistingBinary, linkPath)
+		if info.Mode()&os.ModeSymlink == 0 {
+			if info.IsDir() {
+				return fmt.Errorf("%w: %s is an existing directory; remove it manually", ErrExistingBinary, linkPath)
+			}
+			if !force {
+				return fmt.Errorf("%w: %s (use --force to replace)", ErrExistingBinary, linkPath)
+			}
 		}
 	}
 	tmp := filepath.Join(filepath.Dir(linkPath), fmt.Sprintf(".%s.ghpm-%d", filepath.Base(linkPath), time.Now().UnixNano()))
@@ -280,6 +352,111 @@ func makeSymlink(linkPath, target string, force bool) error {
 		return err
 	}
 	return nil
+}
+
+// installDMG mounts a disk image read-only, copies the application bundle
+// into destDir with ditto (preserving modes, symlinks and signature data) and
+// detaches the image. Only called on macOS.
+func installDMG(ctx context.Context, dmg, destDir, appID, assetName string) (string, []string, error) {
+	mountPoint, err := os.MkdirTemp("", "ghpm-dmg-*")
+	if err != nil {
+		return "", nil, err
+	}
+	attached := false
+	detach := func() error {
+		dctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		out, err := exec.CommandContext(dctx, "hdiutil", "detach", "-quiet", mountPoint).CombinedOutput()
+		if err != nil {
+			_, _ = exec.CommandContext(dctx, "hdiutil", "detach", "-force", "-quiet", mountPoint).CombinedOutput()
+			return fmt.Errorf("detach %s: %v: %s", mountPoint, err, commandError(out))
+		}
+		return nil
+	}
+	defer func() {
+		if attached {
+			_ = detach()
+		}
+		_ = os.RemoveAll(mountPoint)
+	}()
+
+	out, err := func() ([]byte, error) {
+		// A damaged image or a hanging mount must not block install forever.
+		actx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+		defer cancel()
+		return exec.CommandContext(actx, "hdiutil", "attach",
+			"-nobrowse", "-readonly", "-noautoopen", "-quiet", "-mountpoint", mountPoint, dmg).CombinedOutput()
+	}()
+	if err != nil {
+		return "", nil, fmt.Errorf("mount %s: %v: %s", filepath.Base(dmg), err, commandError(out))
+	}
+	attached = true
+
+	bundle, ok, err := archive.FindAppBundle(mountPoint, appID, assetName)
+	if err != nil {
+		return "", nil, err
+	}
+	if !ok {
+		return "", nil, fmt.Errorf("%s does not contain an .app bundle", filepath.Base(dmg))
+	}
+	dst := filepath.Join(destDir, filepath.Base(bundle))
+	out, err = exec.CommandContext(ctx, "ditto", bundle, dst).CombinedOutput()
+	if err != nil {
+		return "", nil, fmt.Errorf("copy %s from disk image: %v: %s", filepath.Base(bundle), err, commandError(out))
+	}
+	var warnings []string
+	if err := detach(); err != nil {
+		warnings = append(warnings, err.Error())
+	}
+	attached = false
+	return dst, warnings, nil
+}
+
+func commandError(out []byte) string {
+	s := strings.TrimSpace(string(out))
+	if i := strings.LastIndexByte(s, '\n'); i >= 0 {
+		s = s[i+1:]
+	}
+	if len(s) > 300 {
+		s = s[:300] + "..."
+	}
+	return s
+}
+
+// prepareAppsDir returns a writable directory for application bundle links.
+// When the default /Applications is not writable (non-admin users) it falls
+// back to ~/Applications and explains the move in a warning.
+func prepareAppsDir(dir string) (string, []string, error) {
+	if strings.TrimSpace(dir) == "" {
+		return "", nil, errors.New("no apps directory configured for .app bundles; set defaults.apps_dir")
+	}
+	if writableDir(dir) {
+		return dir, nil, nil
+	}
+	if filepath.Clean(dir) == "/Applications" {
+		home, err := os.UserHomeDir()
+		if err == nil {
+			fallback := filepath.Join(home, "Applications")
+			if writableDir(fallback) {
+				return fallback, []string{fmt.Sprintf("%s is not writable; linked the application into %s instead", dir, fallback)}, nil
+			}
+		}
+	}
+	return "", nil, fmt.Errorf("cannot write to apps directory %s; set defaults.apps_dir", dir)
+}
+
+func writableDir(dir string) bool {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return false
+	}
+	f, err := os.CreateTemp(dir, ".ghpm-write-*")
+	if err != nil {
+		return false
+	}
+	name := f.Name()
+	_ = f.Close()
+	_ = os.Remove(name)
+	return true
 }
 
 func listVersions(appDir string) []string {

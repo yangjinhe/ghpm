@@ -2,6 +2,7 @@ package app
 
 import (
 	"archive/tar"
+	"archive/zip"
 	"bytes"
 	"compress/gzip"
 	"context"
@@ -26,6 +27,7 @@ import (
 	"golang.org/x/crypto/blake2b"
 
 	"ghpm/internal/config"
+	"ghpm/internal/platform"
 	"ghpm/internal/signature"
 )
 
@@ -578,5 +580,104 @@ func TestPrivateRepoDownloadUsesToken(t *testing.T) {
 	}
 	if res := svc2.InstallOne(context.Background(), "tool", InstallOptions{}); res.Err == nil {
 		t.Fatal("anonymous private install should fail")
+	}
+}
+
+func appZip(t *testing.T, execBody string) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	zw := zip.NewWriter(&buf)
+	for _, f := range []struct {
+		name string
+		mode os.FileMode
+		body string
+	}{
+		{"Motty.app/Contents/Info.plist", 0o644, "<plist/>"},
+		{"Motty.app/Contents/MacOS/motty", 0o644, execBody},
+	} {
+		hdr := &zip.FileHeader{Name: f.name, Method: zip.Deflate}
+		hdr.SetMode(f.mode)
+		w, err := zw.CreateHeader(hdr)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := w.Write([]byte(f.body)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
+}
+
+func TestInstallAppBundleAndRemove(t *testing.T) {
+	payload := appZip(t, "app-binary")
+	mux := http.NewServeMux()
+	var base string
+	mux.HandleFunc("/repos/t8y2/motty/releases/latest", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"tag_name": "v1.0.0", "name": "v1.0.0", "draft": false, "prerelease": false,
+			"assets": []map[string]any{{
+				"id": 1, "name": "motty-1.0.0-darwin-arm64.zip", "size": len(payload),
+				"browser_download_url": base + "/download/motty.zip",
+				"url":                  base + "/assets/motty.zip",
+			}},
+		})
+	})
+	mux.HandleFunc("/download/motty.zip", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write(payload)
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	base = srv.URL
+
+	appsDir := filepath.Join(t.TempDir(), "Applications")
+	app := config.App{
+		ID: "motty", Repo: "t8y2/motty", Channel: "latest",
+		Match: config.Match{Platforms: map[string]string{
+			"darwin/arm64": "motty-{version}-darwin-arm64.zip",
+		}},
+	}
+	paths, cfg := testConfig(t, base, app)
+	cfg.Defaults.AppsDir = appsDir
+	if err := cfg.Save(); err != nil {
+		t.Fatal(err)
+	}
+	svc, err := New(Options{ConfigPath: paths.ConfigFile})
+	if err != nil {
+		t.Fatal(err)
+	}
+	res := svc.InstallOne(context.Background(), "motty", InstallOptions{
+		Platform: platform.Platform{OS: "darwin", Arch: "arm64"},
+	})
+	if res.Err != nil {
+		t.Fatalf("install: %v", res.Err)
+	}
+	if res.Type != "app" {
+		t.Errorf("type = %q", res.Type)
+	}
+	if filepath.Dir(res.Link) != appsDir {
+		t.Errorf("link = %q, want under %q", res.Link, appsDir)
+	}
+	if info, err := os.Lstat(res.Link); err != nil || info.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("app link missing: %v %v", info, err)
+	}
+	st, err := svc.Store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rec := st.Apps["motty"]; rec == nil || rec.LinkPath != res.Link || rec.BinRel != "Motty.app" {
+		t.Fatalf("state = %+v", rec)
+	}
+
+	if _, err := svc.Remove("motty", false); err != nil {
+		t.Fatalf("remove: %v", err)
+	}
+	if _, err := os.Lstat(res.Link); !os.IsNotExist(err) {
+		t.Errorf("app link still present after remove: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(paths.DataDir, "apps", "motty")); !os.IsNotExist(err) {
+		t.Errorf("app version dir still present: %v", err)
 	}
 }

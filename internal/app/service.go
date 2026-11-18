@@ -42,6 +42,7 @@ type Service struct {
 	Paths    config.Paths
 	DataDir  string
 	BinDir   string
+	AppsDir  string
 	CacheDir string
 	GH       *gh.Client
 	Fetcher  *download.Fetcher
@@ -69,8 +70,13 @@ func New(opts Options) (*Service, error) {
 	if binDir == "" {
 		binDir = paths.BinDir
 	}
+	appsDir := cfg.Defaults.AppsDir
+	if appsDir == "" {
+		appsDir = paths.AppsDir
+	}
 	paths.DataDir = dataDir
 	paths.BinDir = binDir
+	paths.AppsDir = appsDir
 	paths.StateFile = filepath.Join(dataDir, "state.json")
 
 	proxy := cfg.Defaults.Proxy
@@ -100,7 +106,7 @@ func New(opts Options) (*Service, error) {
 		}
 	}
 	return &Service{
-		Cfg: cfg, Paths: paths, DataDir: dataDir, BinDir: binDir,
+		Cfg: cfg, Paths: paths, DataDir: dataDir, BinDir: binDir, AppsDir: appsDir,
 		CacheDir: paths.CacheDir, GH: ghClient, Fetcher: fetcher, Store: store,
 	}, nil
 }
@@ -344,6 +350,7 @@ func (s *Service) InstallOne(ctx context.Context, id string, opts InstallOptions
 		SHA256:    sha,
 		DataDir:   s.DataDir,
 		BinDir:    s.BinDir,
+		AppsDir:   s.AppsDir,
 		CacheDir:  s.CacheDir,
 		Proxy:     s.proxy(),
 		Prefix:    s.Cfg.Defaults.GitHub.DownloadPrefix,
@@ -838,13 +845,20 @@ func (s *Service) Rollback(id, toVersion string) (InstallResult, error) {
 		}
 	}
 	if binRel == "" {
-		bin, err := archive.FindBinary(versionDir, app.Install.Bin, app.ID)
-		if err != nil {
-			return res, err
-		}
-		binRel, err = filepath.Rel(versionDir, bin)
-		if err != nil {
-			return res, err
+		if bundle, ok, bundleErr := archive.FindAppBundle(versionDir, app.ID); bundleErr == nil && ok {
+			binRel, err = filepath.Rel(versionDir, bundle)
+			if err != nil {
+				return res, err
+			}
+		} else {
+			bin, err := archive.FindBinary(versionDir, app.Install.Bin, app.ID)
+			if err != nil {
+				return res, err
+			}
+			binRel, err = filepath.Rel(versionDir, bin)
+			if err != nil {
+				return res, err
+			}
 		}
 	}
 	binAbs := filepath.Join(versionDir, binRel)
@@ -1073,6 +1087,7 @@ type Doctor struct {
 	ConfigPath string
 	DataDir    string
 	BinDir     string
+	AppsDir    string
 	CacheDir   string
 	TokenSet   bool
 	BinOnPath  bool
@@ -1087,7 +1102,8 @@ func (s *Service) Diagnostics() Doctor {
 	st, _ := s.Store.Load()
 	d := Doctor{
 		Version: version.String(), OS: platform.Current().OS, Arch: platform.Current().Arch,
-		ConfigPath: s.Cfg.Path, DataDir: s.DataDir, BinDir: s.BinDir, CacheDir: s.CacheDir,
+		ConfigPath: s.Cfg.Path, DataDir: s.DataDir, BinDir: s.BinDir,
+		AppsDir: s.AppsDir, CacheDir: s.CacheDir,
 		TokenSet: s.GH.HasToken(), BinOnPath: s.Cfg.CheckBinDir(), RateLimit: s.GH.RateLimit(),
 		Apps: len(s.Cfg.Apps),
 	}

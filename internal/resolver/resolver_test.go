@@ -270,6 +270,8 @@ func TestDarwinAssetScoring(t *testing.T) {
 		{"tool-universal-darwin.tar.gz", intel},
 		{"tool-1.0.0-universal.zip", intel},
 		{"tool_1.0.0_darwin_arm64.pkg", arm},
+		{"tool_1.0.0_darwin_arm64.dmg", arm},
+		{"tool_1.0.0_universal.dmg", intel},
 	}
 	for _, c := range matches {
 		if got, ok := Score(c.name, c.target, Options{}); !ok {
@@ -283,7 +285,8 @@ func TestDarwinAssetScoring(t *testing.T) {
 	}{
 		{"tool_1.0.0_linux_amd64.tar.gz", arm},
 		{"tool_1.0.0_darwin_amd64.tar.gz", arm},
-		{"tool_1.0.0_darwin_arm64.dmg", arm}, // disk images are not installable
+		{"tool_1.0.0_darwin_amd64.dmg", arm},
+		{"tool_1.0.0_darwin_arm64.dmg", linux},
 		{"tool_1.0.0_darwin_amd64.pkg", linux},
 		{"tool_1.0.0_windows_amd64.zip", intel},
 	}
@@ -299,6 +302,7 @@ func TestDarwinFormatPreference(t *testing.T) {
 	names := []string{
 		"tool_1.0.0_darwin_arm64.pkg",
 		"tool_1.0.0_darwin_arm64.tar.gz",
+		"tool_1.0.0_darwin_arm64.dmg",
 	}
 	best, _, err := Best(names, arm, Options{})
 	if err != nil {
@@ -314,6 +318,22 @@ func TestDarwinFormatPreference(t *testing.T) {
 	if best.Name != "tool_1.0.0_darwin_arm64.pkg" {
 		t.Errorf("install.type pkg should win, got %q", best.Name)
 	}
+	best, _, err = Best(names, arm, Options{InstallType: "dmg"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if best.Name != "tool_1.0.0_darwin_arm64.dmg" {
+		t.Errorf("install.type dmg should pick the image, got %q", best.Name)
+	}
+
+	// A release that only publishes a disk image is still installable.
+	best, _, err = Best([]string{"motty-0.4.14-darwin-arm64.dmg"}, arm, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if best.Format != FormatDmg {
+		t.Errorf("dmg-only release = %+v", best)
+	}
 }
 
 func TestPkgAndDmgClassification(t *testing.T) {
@@ -322,5 +342,25 @@ func TestPkgAndDmgClassification(t *testing.T) {
 	}
 	if c := Classify("tool_1.0.0.dmg"); c.Format != FormatDmg || c.OS != "darwin" {
 		t.Errorf("dmg classify = %+v", c)
+	}
+}
+
+func TestGenerateDMGOnly(t *testing.T) {
+	arm := platform.Platform{OS: "darwin", Arch: "arm64"}
+	names := []string{
+		"motty-0.4.14-darwin-arm64.dmg",
+		"motty-0.4.14-darwin-amd64.dmg",
+		"motty-0.4.14-linux-amd64.tar.gz",
+	}
+	gen, err := Generate(names, arm, "v0.4.14", "0.4.14", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gen.Install.Type != "dmg" {
+		t.Errorf("install type = %q, want dmg", gen.Install.Type)
+	}
+	got := gen.Match.Platforms["darwin/arm64"]
+	if got != "motty-{version}-darwin-arm64.dmg" {
+		t.Errorf("match[darwin/arm64] = %q", got)
 	}
 }

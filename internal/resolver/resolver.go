@@ -162,12 +162,6 @@ func Score(name string, target platform.Platform, opts Options) (Candidate, bool
 	if c.Format == FormatChecksum || c.Format == FormatSignature || c.Format == FormatOther {
 		return c, false
 	}
-	if c.Format == FormatDmg {
-		// Mounting and copying app bundles is not supported; expose the asset
-		// in `ghpm assets` but never select it for install.
-		c.Notes = append(c.Notes, "excluded:disk-image")
-		return c, false
-	}
 	if IsSourceAsset(name) {
 		return c, false
 	}
@@ -214,6 +208,10 @@ func Score(name string, target platform.Platform, opts Options) (Candidate, bool
 		// Installer packages need sudo; prefer archives unless the app asks
 		// for the pkg type explicitly.
 		score += 2
+	case FormatDmg:
+		// Mounting is slower and needs macOS; prefer a zip/tar.gz when the
+		// release publishes one, but fall back to the disk image.
+		score += 3
 	case FormatAppImage:
 		score += 5
 	}
@@ -465,7 +463,7 @@ func Generate(names []string, target platform.Platform, tag, version, preferred 
 		for _, n := range names {
 			if strings.EqualFold(n, preferred) {
 				c := Classify(n)
-				if c.Format == FormatChecksum || c.Format == FormatSignature || c.Format == FormatOther || c.Format == FormatDmg {
+				if c.Format == FormatChecksum || c.Format == FormatSignature || c.Format == FormatOther {
 					return Generated{}, fmt.Errorf("asset %q is not installable", preferred)
 				}
 				chosen = c
@@ -488,7 +486,7 @@ func Generate(names []string, target platform.Platform, tag, version, preferred 
 	perPlatform := map[string][]Candidate{}
 	for _, n := range names {
 		c := Classify(n)
-		if c.Format == FormatChecksum || c.Format == FormatSignature || c.Format == FormatOther || c.Format == FormatDmg || IsSourceAsset(n) {
+		if c.Format == FormatChecksum || c.Format == FormatSignature || c.Format == FormatOther || IsSourceAsset(n) {
 			continue
 		}
 		if c.OS == "" || len(c.Arches) != 1 {

@@ -15,6 +15,7 @@ type file struct {
 	name string
 	mode int64
 	body string
+	link string
 }
 
 func makeTarGz(t *testing.T, files []file) string {
@@ -26,6 +27,11 @@ func makeTarGz(t *testing.T, files []file) string {
 		hdr := &tar.Header{Name: f.name, Mode: f.mode, Size: int64(len(f.body)), Typeflag: tar.TypeReg}
 		if strings.HasSuffix(f.name, "/") {
 			hdr.Typeflag = tar.TypeDir
+			hdr.Size = 0
+		}
+		if f.link != "" {
+			hdr.Typeflag = tar.TypeSymlink
+			hdr.Linkname = f.link
 			hdr.Size = 0
 		}
 		if err := tw.WriteHeader(hdr); err != nil {
@@ -259,5 +265,102 @@ func TestMacMetadataInZip(t *testing.T) {
 	}
 	if filepath.Base(bin) != "tool" {
 		t.Errorf("picked %q, want tool", bin)
+	}
+}
+
+func TestFindAppBundle(t *testing.T) {
+	root := t.TempDir()
+	bundle := filepath.Join(root, "Motty.app")
+	if err := os.MkdirAll(filepath.Join(bundle, "Contents", "MacOS"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(bundle, "Contents", "Info.plist"), []byte("<plist/>"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(bundle, "Contents", "MacOS", "motty"), []byte("bin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	got, ok, err := FindAppBundle(root)
+	if err != nil || !ok {
+		t.Fatalf("FindAppBundle = %q, %v, %v", got, ok, err)
+	}
+	if got != bundle {
+		t.Errorf("bundle = %q, want %q", got, bundle)
+	}
+
+	if _, ok, err := FindAppBundle(t.TempDir()); err != nil || ok {
+		t.Errorf("empty tree should have no bundle: ok=%v err=%v", ok, err)
+	}
+
+	// A directory without Contents/Info.plist is not a bundle.
+	fake := filepath.Join(root, "Fake.app", "Contents", "MacOS")
+	if err := os.MkdirAll(fake, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, _ := FindAppBundle(root); !ok {
+		t.Error("existing bundle should still be found")
+	}
+}
+
+func TestExtractSymlinks(t *testing.T) {
+	src := makeTarGz(t, []file{
+		{name: "dir/", mode: 0o755},
+		{name: "dir/tool", mode: 0o755, body: "binary"},
+		{name: "link", mode: 0o777, link: "dir/tool"},
+		{name: "dir/alias", mode: 0o777, link: "tool"},
+	})
+	dest := t.TempDir()
+	if _, err := Extract(src, dest, 0); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range []string{"link", "dir/alias"} {
+		info, err := os.Lstat(filepath.Join(dest, filepath.FromSlash(p)))
+		if err != nil {
+			t.Fatalf("%s: %v", p, err)
+		}
+		if info.Mode()&os.ModeSymlink == 0 {
+			t.Errorf("%s is not a symlink", p)
+		}
+	}
+	data, err := os.ReadFile(filepath.Join(dest, "link"))
+	if err != nil || string(data) != "binary" {
+		t.Errorf("link content = %q, %v", data, err)
+	}
+}
+
+func TestExtractRejectsUnsafeSymlinks(t *testing.T) {
+	cases := []struct {
+		name  string
+		files []file
+		want  string
+	}{
+		{
+			name:  "absolute",
+			files: []file{{name: "link", mode: 0o777, link: "/etc/passwd"}},
+			want:  "absolute target",
+		},
+		{
+			name:  "escape",
+			files: []file{{name: "link", mode: 0o777, link: "../../etc/passwd"}},
+			want:  "escapes destination",
+		},
+		{
+			name: "write through symlink",
+			files: []file{
+				{name: "dir", mode: 0o777, link: "."},
+				{name: "dir/evil", mode: 0o644, body: "x"},
+			},
+			want: "writes through symlink",
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			src := makeTarGz(t, c.files)
+			dest := t.TempDir()
+			_, err := Extract(src, dest, 0)
+			if err == nil || !strings.Contains(err.Error(), c.want) {
+				t.Fatalf("err = %v, want %q", err, c.want)
+			}
+		})
 	}
 }

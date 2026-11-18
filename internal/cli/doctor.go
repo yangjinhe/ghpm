@@ -23,6 +23,9 @@ func newDoctorCmd() *cobra.Command {
 			fmt.Fprintf(out, "config:     %s\n", d.ConfigPath)
 			fmt.Fprintf(out, "data dir:   %s\n", d.DataDir)
 			fmt.Fprintf(out, "bin dir:    %s\n", d.BinDir)
+			if d.AppsDir != "" {
+				fmt.Fprintf(out, "apps dir:   %s\n", d.AppsDir)
+			}
 			fmt.Fprintf(out, "cache dir:  %s\n", d.CacheDir)
 			fmt.Fprintf(out, "apps:       %d configured, %d installed\n", d.Apps, d.Installed)
 			fmt.Fprintf(out, "token:      %s\n", yesNo(d.TokenSet))

@@ -4,6 +4,8 @@ version: 1
 defaults:
   bin_dir: ~/.local/bin
   data_dir: ~/.local/share/ghpm
+  # macOS: .app bundle 的软链目录（默认 /Applications，不可写时回退 ~/Applications）
+  # apps_dir: /Applications
   verify: if-available
   prefer: gnu
   concurrency: 4

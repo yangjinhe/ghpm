@@ -1,5 +1,32 @@
 # Changelog
 
+## Unreleased — macOS application bundles
+
+### 新增
+
+- **DMG 支持**：只有 `.dmg` 的 release 也可安装。macOS 上只读挂载镜像、
+  用 `ditto` 取出 `.app`（保留执行位、符号链接与签名数据）后 detach；
+  release 同时提供 zip/tar.gz 时优先归档。镜像内没有 `.app`、或不在
+  macOS 上执行 dmg 安装时会给出明确错误。
+- **自动识别 `.app`**：归档里只有 macOS 应用包（如 `Motty.app`）时，安装为
+  application bundle 而不是把 `Contents/MacOS` 里的可执行文件软链到
+  `~/.local/bin`。版本保存在数据目录，`/Applications` 中创建指向当前版本的
+  软链；升级和回滚原子切换软链，`ghpm remove` 会一并删除应用链接。
+  `/Applications` 不可写时回退到 `~/Applications` 并给出 warning。
+- **`install.type: app`**：可显式要求应用包安装；归档同时包含 CLI 与 `.app`
+  时仍默认安装 CLI，设置 `install.bin` 可强制选择包内可执行文件。
+- **应用目录配置**：`defaults.apps_dir` / `GHPM_APPS_DIR`（macOS 默认
+  `/Applications`）；`ghpm doctor` 会显示。
+- **符号链接解包**：保留归档内的相对符号链接（Electron 等应用包需要），
+  绝对路径、越界目标以及通过符号链接写入后续条目的归档一律拒绝。
+- **bundle 可执行位修复**：ZIP 丢失执行位时恢复 `Contents/MacOS/*` 的 0755，
+  避免 LaunchServices 无法启动。
+
+### 变更
+
+- `ghpm rollback` 在旧版本 bundle 名不同时通过 `.app` 探测定位，而不是退回
+  包内裸可执行文件。
+
 ## v0.3.0 (2026-11-18)
 
 macOS 支持与 Gatekeeper 兼容。
