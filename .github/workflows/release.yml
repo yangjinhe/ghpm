@@ -83,23 +83,60 @@ jobs:
           EOF
           dpkg-deb --build --root-owner-group "$pkg" "dist/ghpm_${version}_${GOARCH}.deb"
           ( cd dist && sha256sum "ghpm_${version}_${GOARCH}.deb" > "ghpm_${version}_${GOARCH}.deb.sha256" )
-      - name: Publish Linux release assets
-        if: matrix.deb
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ghpm-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: |
+            dist/*.tar.gz
+            dist/*.tar.gz.sha256
+            dist/*.deb
+            dist/*.deb.sha256
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Compose release notes from CHANGELOG.md
+        run: |
+          set -eu
+          version="${GITHUB_REF_NAME#v}"
+          notes="release-notes.md"
+          awk -v v="$version" '
+            /^## / {
+              if (capture) exit
+              if ($2 == "v" v) capture = 1
+              next
+            }
+            capture { print }
+          ' CHANGELOG.md > "$notes"
+          # Drop leading blank lines.
+          sed -i '/./,$!d' "$notes"
+          if [ ! -s "$notes" ]; then
+            printf 'Release %s\n\nSee CHANGELOG.md for details.\n' "$GITHUB_REF_NAME" > "$notes"
+          fi
+          prev="$(git describe --tags --abbrev=0 "${GITHUB_REF_NAME}^" 2>/dev/null || true)"
+          if [ -n "$prev" ]; then
+            printf '\n**Full Changelog**: https://github.com/%s/compare/%s...%s\n' \
+              "$GITHUB_REPOSITORY" "$prev" "$GITHUB_REF_NAME" >> "$notes"
+          fi
+          echo '--- release notes ---'
+          cat "$notes"
+      - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
+          body_path: release-notes.md
           files: |
             dist/*.tar.gz
             dist/*.tar.gz.sha256
             dist/*.deb
             dist/*.deb.sha256
-          generate_release_notes: true
-          fail_on_unmatched_files: true
-      - name: Publish macOS release assets
-        if: matrix.goos == 'darwin'
-        uses: softprops/action-gh-release@v2
-        with:
-          files: |
-            dist/*.tar.gz
-            dist/*.tar.gz.sha256
-          generate_release_notes: true
           fail_on_unmatched_files: true
