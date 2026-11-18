@@ -77,7 +77,7 @@ func New(opts Options) (*Service, error) {
 	paths.DataDir = dataDir
 	paths.BinDir = binDir
 	paths.AppsDir = appsDir
-	paths.StateFile = filepath.Join(dataDir, "state.json")
+	paths.StateFile = filepath.Join(dataDir, "state.db")
 
 	proxy := cfg.Defaults.Proxy
 	if opts.Proxy != "" {
@@ -749,6 +749,41 @@ func (s *Service) batchLatestTags(ctx context.Context, apps []config.App, st *st
 	}
 	tags, _ := s.GH.LatestTags(ctx, repos)
 	return tags
+}
+
+// ResolveID maps user input (app id, owner/repo or a GitHub URL) to the id
+// ghpm uses internally. Installed apps whose config entry was removed are
+// still resolvable through state.
+func (s *Service) ResolveID(input string) (string, error) {
+	input = strings.TrimSpace(input)
+	if input == "" {
+		return "", errors.New("empty app name")
+	}
+	if a := s.Cfg.AppByID(input); a != nil {
+		return a.ID, nil
+	}
+	for _, a := range s.Cfg.Apps {
+		if strings.EqualFold(a.ID, input) {
+			return a.ID, nil
+		}
+	}
+	repo, err := config.ParseRepo(input)
+	if err != nil {
+		return "", fmt.Errorf("app %q is not configured", input)
+	}
+	for _, a := range s.Cfg.Apps {
+		if strings.EqualFold(a.Repo, repo) {
+			return a.ID, nil
+		}
+	}
+	if st, loadErr := s.Store.Load(); loadErr == nil && st != nil {
+		for id, rec := range st.Apps {
+			if strings.EqualFold(rec.Repo, repo) {
+				return id, nil
+			}
+		}
+	}
+	return "", fmt.Errorf("no app configured for %q; run `ghpm add %s` first", repo, repo)
 }
 
 // CompareVersions reports whether latest is newer than current and whether

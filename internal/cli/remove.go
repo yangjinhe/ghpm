@@ -21,11 +21,15 @@ func newRemoveCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if !yes && !confirm(fmt.Sprintf("Remove %d app(s)?", len(args))) {
+			ids, err := resolveIDs(svc, args)
+			if err != nil {
+				return err
+			}
+			if !yes && !confirm(fmt.Sprintf("Remove %d app(s)?", len(ids))) {
 				fmt.Fprintln(cmd.ErrOrStderr(), "aborted")
 				return nil
 			}
-			for _, id := range args {
+			for _, id := range ids {
 				removed, err := svc.Remove(id, purge)
 				if err != nil {
 					return fmt.Errorf("%s: %w", id, err)

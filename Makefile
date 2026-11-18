@@ -1,5 +1,5 @@
 BINARY  ?= ghpm
-VERSION ?= 0.3.1-dev
+VERSION ?= 0.4.0-dev
 COMMIT  ?= $(shell git rev-parse --short HEAD 2>/dev/null)
 LDFLAGS  = -s -w -X ghpm/internal/version.Version=$(VERSION)
 ifneq ($(COMMIT),)

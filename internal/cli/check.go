@@ -32,8 +32,12 @@ func newCheckCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			ids, err := resolveIDs(svc, args)
+			if err != nil {
+				return err
+			}
 			pf := newProgressPrinter()
-			results := svc.Check(cmd.Context(), args, pf.Event)
+			results := svc.Check(cmd.Context(), ids, pf.Event)
 			pf.Stop()
 
 			if flags.json {

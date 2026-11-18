@@ -153,7 +153,7 @@ func TestCLIWorkflow(t *testing.T) {
 	defer closer()
 	bin := filepath.Join(os.Getenv("HOME"), ".local", "bin", "tool")
 
-	out, err := runCLI(t, "-c", cfg, "install", "tool", "--json")
+	out, err := runCLI(t, "-c", cfg, "install", "acme/tool", "--json")
 	if err != nil {
 		t.Fatalf("install: %v\n%s", err, out)
 	}
@@ -192,7 +192,7 @@ func TestCLIWorkflow(t *testing.T) {
 	}
 
 	// pin excludes it from checks.
-	if out, err := runCLI(t, "-c", cfg, "pin", "tool"); err != nil {
+	if out, err := runCLI(t, "-c", cfg, "pin", "acme/tool"); err != nil {
 		t.Fatalf("pin: %v %s", err, out)
 	}
 	out, err = runCLI(t, "-c", cfg, "check", "--json")
@@ -206,12 +206,12 @@ func TestCLIWorkflow(t *testing.T) {
 	if len(checks) != 1 || !checks[0].Pinned {
 		t.Fatalf("check = %+v", checks)
 	}
-	if _, err := runCLI(t, "-c", cfg, "pin", "tool", "--unpin"); err != nil {
+	if _, err := runCLI(t, "-c", cfg, "pin", "https://github.com/acme/tool", "--unpin"); err != nil {
 		t.Fatal(err)
 	}
 
 	// Roll back to the previous version.
-	if out, err := runCLI(t, "-c", cfg, "rollback", "tool"); err != nil {
+	if out, err := runCLI(t, "-c", cfg, "rollback", "acme/tool"); err != nil {
 		t.Fatalf("rollback: %v %s", err, out)
 	}
 	if data, err := os.ReadFile(bin); err != nil || string(data) != "v1" {
@@ -219,7 +219,7 @@ func TestCLIWorkflow(t *testing.T) {
 	}
 
 	// Remove deletes the symlink and state.
-	if out, err := runCLI(t, "-c", cfg, "remove", "tool", "--yes"); err != nil {
+	if out, err := runCLI(t, "-c", cfg, "remove", "https://github.com/acme/tool", "--yes"); err != nil {
 		t.Fatalf("remove: %v %s", err, out)
 	}
 	if _, err := os.Lstat(bin); !os.IsNotExist(err) {
@@ -234,6 +234,11 @@ func TestCLIErrors(t *testing.T) {
 	out, err := runCLI(t, "-c", cfg, "install", "missing")
 	if err == nil || !strings.Contains(err.Error(), "not configured") {
 		t.Errorf("err = %v, out = %s", err, out)
+	}
+
+	out, err = runCLI(t, "-c", cfg, "remove", "nobody/none", "--yes")
+	if err == nil || !strings.Contains(err.Error(), "no app configured") {
+		t.Errorf("unknown repo remove: err = %v, out = %s", err, out)
 	}
 
 	out, err = runCLI(t, "-c", cfg, "install", "tool", "--arch", "sparc")

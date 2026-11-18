@@ -25,7 +25,11 @@ func newPruneCmd() *cobra.Command {
 				fmt.Fprintln(cmd.ErrOrStderr(), "aborted")
 				return nil
 			}
-			removed, err := svc.Prune(args, keep)
+			ids, err := resolveIDs(svc, args)
+			if err != nil {
+				return err
+			}
+			removed, err := svc.Prune(ids, keep)
 			if err != nil {
 				return err
 			}

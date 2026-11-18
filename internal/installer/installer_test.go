@@ -457,3 +457,16 @@ func TestDMGRequiresMacOS(t *testing.T) {
 		t.Fatalf("want macOS-only error, got %v", err)
 	}
 }
+
+func TestArchiveTypeRoutesDMGAssetToMacOSPath(t *testing.T) {
+	if runtime.GOOS == "darwin" {
+		t.Skip("the macOS path mounts the image for real")
+	}
+	root := t.TempDir()
+	req := appRequest(root, "http://127.0.0.1:1/motty.dmg", "1.0.0")
+	req.App.Install.Type = "archive" // stale config from ghpm add
+	req.AssetName = "HGhub_0.0.2_arm64.dmg"
+	if _, err := Install(context.Background(), nil, req); err == nil || !strings.Contains(err.Error(), "macOS") {
+		t.Fatalf("dmg asset with archive type should route to the dmg path, got %v", err)
+	}
+}

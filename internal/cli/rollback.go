@@ -20,7 +20,11 @@ func newRollbackCmd() *cobra.Command {
 			if len(args) == 2 {
 				target = args[1]
 			}
-			res, err := svc.Rollback(args[0], target)
+			id, err := svc.ResolveID(args[0])
+			if err != nil {
+				return err
+			}
+			res, err := svc.Rollback(id, target)
 			if err != nil {
 				return err
 			}

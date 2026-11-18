@@ -681,3 +681,32 @@ func TestInstallAppBundleAndRemove(t *testing.T) {
 		t.Errorf("app version dir still present: %v", err)
 	}
 }
+
+func TestResolveAppIdentifier(t *testing.T) {
+	paths, _ := testConfig(t, "https://api.github.com", toolApp())
+	svc, err := New(Options{ConfigPath: paths.ConfigFile})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cases := map[string]string{
+		"tool":                          "tool",
+		"TOOL":                          "tool",
+		"acme/tool":                     "tool",
+		"ACME/TOOL":                     "tool",
+		"https://github.com/acme/tool":  "tool",
+		"git@github.com:acme/tool.git":  "tool",
+		"github.com/acme/tool/releases": "tool",
+	}
+	for input, want := range cases {
+		got, err := svc.ResolveID(input)
+		if err != nil || got != want {
+			t.Errorf("ResolveID(%q) = %q, %v; want %q", input, got, err, want)
+		}
+	}
+	if _, err := svc.ResolveID("other/repo"); err == nil || !strings.Contains(err.Error(), "no app configured") {
+		t.Errorf("unknown repo error = %v", err)
+	}
+	if _, err := svc.ResolveID("nope"); err == nil {
+		t.Error("unknown id should fail")
+	}
+}

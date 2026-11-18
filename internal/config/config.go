@@ -96,7 +96,7 @@ func defaultPaths(goos, home string, getenv func(string) string) Paths {
 		CacheDir:   filepath.Join(cacheHome, "ghpm"),
 		BinDir:     binDir,
 		AppsDir:    appsDir,
-		StateFile:  filepath.Join(dataDir, "state.json"),
+		StateFile:  filepath.Join(dataDir, "state.db"),
 		LogDir:     filepath.Join(stateHome, "ghpm"),
 	}
 }

@@ -489,15 +489,19 @@ func Generate(names []string, target platform.Platform, tag, version, preferred 
 		if c.Format == FormatChecksum || c.Format == FormatSignature || c.Format == FormatOther || IsSourceAsset(n) {
 			continue
 		}
-		if c.OS == "" || len(c.Arches) != 1 {
+		if c.OS == "" || len(c.Arches) == 0 {
 			continue
 		}
-		scored, ok := Score(n, platform.Platform{OS: c.OS, Arch: c.Arches[0]}, opts)
-		if !ok {
-			continue
+		// Fat binaries ("universal") cover several architectures; register
+		// the asset for each so they can outrank an arch-specific disk image.
+		for _, arch := range c.Arches {
+			scored, ok := Score(n, platform.Platform{OS: c.OS, Arch: arch}, opts)
+			if !ok {
+				continue
+			}
+			key := c.OS + "/" + arch
+			perPlatform[key] = append(perPlatform[key], scored)
 		}
-		key := c.OS + "/" + c.Arches[0]
-		perPlatform[key] = append(perPlatform[key], scored)
 	}
 	platforms := map[string]Candidate{}
 	for key, list := range perPlatform {

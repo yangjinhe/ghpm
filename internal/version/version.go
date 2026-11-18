@@ -2,7 +2,7 @@
 package version
 
 // Version is overridden with -ldflags "-X ghpm/internal/version.Version=...".
-var Version = "0.3.1-dev"
+var Version = "0.4.0-dev"
 
 // Commit is the git revision, also set at link time.
 var Commit = ""

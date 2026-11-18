@@ -265,3 +265,76 @@ func TestInvalidJSON(t *testing.T) {
 		t.Errorf("status = %d, want 400", rec.Code)
 	}
 }
+
+func TestHiddenElementsStayHidden(t *testing.T) {
+	// Regression test: .drawer sets display:flex, which used to override the
+	// user-agent [hidden] rule and made the close button look broken.
+	css, err := staticFS.ReadFile("static/style.css")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(css), "[hidden]") || !strings.Contains(string(css), "display: none !important") {
+		t.Error("style.css must force [hidden] to display:none")
+	}
+	html, err := staticFS.ReadFile("static/index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(html), `id="drawer"`) || !strings.Contains(string(html), "hidden") {
+		t.Error("drawer markup should start hidden")
+	}
+	js, err := staticFS.ReadFile("static/app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(js), `$("#drawer").hidden = true`) {
+		t.Error("drawer close handler must set hidden")
+	}
+	if !strings.Contains(string(js), "removeApp(a.id, false)") {
+		t.Error("row remove action must keep the config entry")
+	}
+}
+
+func TestRemoveEndpointDeletesConfig(t *testing.T) {
+	svc, paths, closer := testEnv(t)
+	defer closer()
+	ts := httptest.NewServer(New(svc).Handler(false))
+	defer ts.Close()
+
+	req, err := http.NewRequest(http.MethodPost, ts.URL+"/api/remove",
+		strings.NewReader(`{"id":"tool","purge":true}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d: %s", resp.StatusCode, body)
+	}
+
+	data, err := os.ReadFile(paths.ConfigFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "id: tool") {
+		t.Errorf("config still lists the removed app:\n%s", data)
+	}
+
+	appsResp, err := http.Get(ts.URL + "/api/apps")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer appsResp.Body.Close()
+	var body appsResponse
+	if err := json.NewDecoder(appsResp.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if len(body.Apps) != 0 {
+		t.Errorf("apps after remove = %+v", body.Apps)
+	}
+}

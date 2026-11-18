@@ -19,7 +19,10 @@ With a version argument, ghpm first rolls back to that installed version.`,
 			if err != nil {
 				return err
 			}
-			id := args[0]
+			id, err := svc.ResolveID(args[0])
+			if err != nil {
+				return err
+			}
 			if unpin {
 				if err := svc.SetPinned(id, false); err != nil {
 					return err

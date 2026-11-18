@@ -166,6 +166,18 @@ ghpm update --yes   # 自更新到最新 release
 
 通用参数：`--config/-c <file>`、`--proxy <url>`、`--no-cache`、`--json`。
 
+凡是接收应用参数的命令（`install`、`check`、`update`、`remove`、`pin`、
+`rollback`、`prune`）都接受三种写法：配置中的 app id、`owner/repo` 或
+GitHub URL。例如下面三条等价：
+
+```bash
+ghpm remove HGhub
+ghpm remove Minireel/HGhub
+ghpm remove https://github.com/Minireel/HGhub
+```
+
+注意：`remove` 默认保留配置项（方便重装），需要连配置一起删时加 `--purge`。
+
 安装/更新相关：`--os`、`--arch`（交叉准备配置）、`--tag`（指定版本）、
 `--force`（覆盖非 ghpm 管理的同名文件）。
 
@@ -323,7 +335,7 @@ signature:
 ```
 ~/.local/share/ghpm/                # Linux；macOS 为 ~/Library/Application Support/ghpm
 ├── apps/<id>/<version>/...        # 每个版本独立目录
-├── state.json                     # 安装记录（原子写 + 文件锁）
+├── state.db                       # 安装记录（SQLite 单文件）；旧版 state.json 自动迁移后删除
 └── cache/ (XDG_CACHE_HOME/ghpm)   # macOS 为 ~/Library/Caches/ghpm
     ├── releases/<hash>.json       # ETag 元数据缓存
     ├── downloads/<id>/<ver>/...   # 已下载资产（重装不再联网）
@@ -333,6 +345,11 @@ signature:
 ~/.local/bin/<name> -> ../share/ghpm/apps/<id>/<ver>/<file>
 /Applications/<Name>.app -> ~/Library/Application Support/ghpm/apps/<id>/<ver>/<Name>.app
 ```
+
+首次运行新版本时，如果数据目录里存在旧的 `state.json`，会自动导入
+`state.db`（保留版本、pin、检查缓存等全部字段），成功后删除
+`state.json` 与 `state.json.lock`；JSON 损坏时会中止并保留原文件，修复后
+下次启动重试。
 
 ## 自动检查更新
 
@@ -446,7 +463,7 @@ internal/download   断点续传、镜像前缀、SHA-256
 internal/archive    安全解包、可执行文件定位
 internal/installer  原子安装、软链、版本清理
 internal/signature  minisign / GPG 分离签名校验
-internal/state      state.json + flock
+internal/state      state.db（SQLite）+ 旧 state.json 自动迁移
 ```
 
 设计原则：平台识别与资产选择是纯函数，便于表驱动测试；网络、文件系统

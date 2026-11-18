@@ -31,7 +31,10 @@ func newInstallCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			ids := args
+			ids, err := resolveIDs(svc, args)
+			if err != nil {
+				return err
+			}
 			switch {
 			case len(ids) == 0 && all:
 				ids = svc.ConfiguredIDs()

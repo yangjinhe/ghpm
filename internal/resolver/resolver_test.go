@@ -364,3 +364,31 @@ func TestGenerateDMGOnly(t *testing.T) {
 		t.Errorf("match[darwin/arm64] = %q", got)
 	}
 }
+
+func TestGeneratePrefersUniversalArchiveOverArchDMG(t *testing.T) {
+	arm := platform.Platform{OS: "darwin", Arch: "arm64"}
+	// Mirrors Minireel/HGhub: no OS token in arch-specific names, plus a
+	// universal .app.tar.gz and a universal .dmg.
+	names := []string{
+		"HGhub_0.0.2_universal.app.tar.gz",
+		"HGhub_0.0.2_universal.dmg",
+		"HGhub_0.0.2_arm64.app.tar.gz",
+		"HGhub_0.0.2_arm64.dmg",
+		"HGhub_0.0.2_x64.app.tar.gz",
+		"HGhub_0.0.2_x64.dmg",
+	}
+	gen, err := Generate(names, arm, "v0.0.2", "0.0.2", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gen.Chosen.Name != "HGhub_0.0.2_universal.app.tar.gz" {
+		t.Errorf("chosen = %q", gen.Chosen.Name)
+	}
+	got := gen.Match.Platforms["darwin/arm64"]
+	if got != "HGhub_{version}_universal.app.tar.gz" {
+		t.Errorf("match[darwin/arm64] = %q", got)
+	}
+	if gen.Install.Type != "archive" {
+		t.Errorf("install type = %q", gen.Install.Type)
+	}
+}

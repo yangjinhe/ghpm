@@ -31,7 +31,10 @@ Pinned apps are skipped unless named explicitly.`,
 			if err != nil {
 				return err
 			}
-			ids := args
+			ids, err := resolveIDs(svc, args)
+			if err != nil {
+				return err
+			}
 			if len(ids) > 0 {
 				if err := requireConfigured(svc, ids); err != nil {
 					return err

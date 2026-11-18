@@ -85,7 +85,9 @@ func Install(ctx context.Context, fetcher *download.Fetcher, req Request) (res R
 	if typeName == "" {
 		typeName = inferType(req.AssetName)
 	}
-	if typeName == "app" && strings.HasSuffix(strings.ToLower(req.AssetName), ".dmg") {
+	// Configs created before dmg support (or hand-edited matches) may pair
+	// install.type archive/app with a disk image; route by the actual asset.
+	if (typeName == "archive" || typeName == "app") && strings.HasSuffix(strings.ToLower(req.AssetName), ".dmg") {
 		typeName = "dmg"
 	}
 	if typeName == "dmg" && runtime.GOOS != "darwin" {

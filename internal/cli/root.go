@@ -71,6 +71,26 @@ func newService() (*app.Service, error) {
 	return app.New(app.Options{ConfigPath: flags.configPath, Proxy: flags.proxy, NoCache: flags.noCache})
 }
 
+// resolveIDs accepts app ids, owner/repo strings or GitHub URLs and returns
+// deduplicated internal ids. Every command that takes an app should go
+// through this so `ghpm remove owner/repo` behaves like `ghpm add owner/repo`.
+func resolveIDs(svc *app.Service, args []string) ([]string, error) {
+	ids := make([]string, 0, len(args))
+	seen := make(map[string]bool, len(args))
+	for _, arg := range args {
+		id, err := svc.ResolveID(arg)
+		if err != nil {
+			return nil, err
+		}
+		if seen[id] {
+			continue
+		}
+		seen[id] = true
+		ids = append(ids, id)
+	}
+	return ids, nil
+}
+
 func targetPlatform(osName, arch string) (platform.Platform, error) {
 	if osName == "" && arch == "" {
 		return platform.Current(), nil

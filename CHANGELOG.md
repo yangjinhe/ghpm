@@ -1,5 +1,29 @@
 # Changelog
 
+## Unreleased
+
+### 变更
+
+- **安装元数据迁移到 SQLite**：`state.json` 改为 `state.db`（SQLite 单文件 +
+  busy_timeout，纯 Go 驱动，保持 CGO-free 交叉编译）。首次启动自动导入旧
+  JSON 的全部字段，成功后删除 `state.json` 与 `state.json.lock`；JSON 损坏
+  时中止并保留文件，修复后可重试。数据库位于数据目录，支持并发 CLI/TUI/Web
+  访问。
+
+### 修复
+
+- **命令行参数统一**：`install`/`check`/`update`/`remove`/`pin`/`rollback`/
+  `prune` 现在都接受 app id、`owner/repo` 或 GitHub URL。
+  `ghpm remove Minireel/HGhub` 会被解析到配置里的 id。
+- **Web 进度面板无法关闭**：`.drawer { display:flex }` 覆盖了浏览器对
+  `[hidden]` 的默认样式，导致右上角 × 无效。新增全局
+  `[hidden] { display:none !important }`，并补充回归测试。
+- **universal 资产映射**：`ghpm add` 之前会把 darwin 平台映射到架构专属的
+  `.dmg`，即使 release 里同时有评分更高的 universal `.app.tar.gz`。现在胖
+  二进制会注册到每个支持的架构。
+- **dmg 资产路由**：旧配置里 `install.type: archive` 配上 `.dmg` 资产时会
+  错误地尝试解包；安装器现在按资产后缀路由到 DMG 流程。
+
 ## v0.3.1 (2026-11-18)
 
 macOS 应用包与 DMG 支持。
