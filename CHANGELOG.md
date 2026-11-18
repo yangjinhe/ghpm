@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased — macOS application bundles
+## v0.3.1 (2026-11-18)
+
+macOS 应用包与 DMG 支持。
 
 ### 新增
 
