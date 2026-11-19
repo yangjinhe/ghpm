@@ -45,7 +45,7 @@ GHPM_GUI_SNAPSHOT=/tmp/ghpm-gui.png go test -run TestSnapshot -v
 
 ## 发布通道
 
-GUI 使用独立 tag（如 `v0.5.0-gui`）发布，`make_latest: false`，不会覆盖
+GUI 使用独立 tag（如 `v0.5.1-gui`）发布，`make_latest: false`，不会覆盖
 CLI 的 latest release，也不会与 CLI 资产混放。工作流会：
 
 - macOS runner：`mygo build -platform darwin/universal`，发布 dmg
@@ -55,7 +55,7 @@ CLI 的 latest release，也不会与 CLI 资产混放。工作流会：
 安装：
 
 ```bash
-ghpm add yangjinhe/ghpm --channel tag:v0.5.0-gui --id ghpm-gui --install
+ghpm add yangjinhe/ghpm --channel tag:v0.5.1-gui --id ghpm-gui --install
 ```
 
 macOS 会识别 dmg 中的 `ghpm-gui.app` 并软链到 `/Applications`；Linux 会安装

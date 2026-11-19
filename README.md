@@ -221,12 +221,12 @@ make gui        # 需要 Go 1.27.3+，go.mod 会自动选择工具链
 回滚、详情、卸载（可选删除配置）、实时进度面板、原生菜单、桌面通知和
 单实例。Linux 上使用 OpenGL/CPU 绘制，不依赖 WebKitGTK。
 
-GUI 使用独立的 release 通道：tag 形如 `v0.5.0-gui`，发布时标记
+GUI 使用独立的 release 通道：tag 形如 `v0.5.1-gui`，发布时标记
 `make_latest=false`，所以不会占用 CLI 的 `latest`，也不会和 CLI 资产混在
 同一个 release 里。安装：
 
 ```bash
-ghpm add yangjinhe/ghpm --channel tag:v0.5.0-gui --id ghpm-gui --install
+ghpm add yangjinhe/ghpm --channel tag:v0.5.1-gui --id ghpm-gui --install
 ```
 
 macOS 发布 universal dmg（安装为 `/Applications/ghpm-gui.app`），Linux 发布
