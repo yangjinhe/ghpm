@@ -181,7 +181,9 @@ ghpm remove https://github.com/Minireel/HGhub
 
 同一仓库可以配置多个应用（使用不同的 `--id`），例如 CLI 与 GUI。自动选择
 遇到多个同分候选时，终端下 `ghpm add` 会列出候选并提示选择；非交互环境
-会报错并提示用 `--asset` 指定。
+会报错并提示用 `--asset` 指定。如果两个应用默认使用同一个软链名，后安装
+的会自动改用 app id 作为链接名并给出 warning；显式 `install.link` 冲突会
+报错。`ghpm remove` 只删除指向自身版本目录的软链。
 
 安装/更新相关：`--os`、`--arch`（交叉准备配置）、`--tag`（指定版本）、
 `--force`（覆盖非 ghpm 管理的同名文件）。

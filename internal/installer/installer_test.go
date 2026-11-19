@@ -470,3 +470,72 @@ func TestArchiveTypeRoutesDMGAssetToMacOSPath(t *testing.T) {
 		t.Fatalf("dmg asset with archive type should route to the dmg path, got %v", err)
 	}
 }
+
+func TestInstallLinkCollisionFallsBackToAppID(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write(makeArchive(t, "v1"))
+	}))
+	defer srv.Close()
+	root := t.TempDir()
+	fetcher, _ := download.New("")
+	req := Request{
+		App:       config.App{ID: "testghpm", Repo: "acme/tool", Install: config.Install{Type: "archive"}},
+		Tag:       "v1.0.0",
+		Version:   "1.0.0",
+		AssetName: "tool_1.0.0_linux_amd64.tar.gz",
+		AssetURL:  srv.URL,
+		DataDir:   filepath.Join(root, "data"),
+		BinDir:    filepath.Join(root, "bin"),
+		CacheDir:  filepath.Join(root, "cache"),
+		PruneKeep: 2,
+		ReservedLinks: map[string]string{
+			filepath.Join(root, "bin", "tool"): "tool",
+		},
+	}
+	res, err := Install(context.Background(), fetcher, req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if filepath.Base(res.LinkPath) != "testghpm" {
+		t.Errorf("link = %q, want the app id", res.LinkPath)
+	}
+	if len(res.Warnings) == 0 || !strings.Contains(res.Warnings[0], "used by app") {
+		t.Errorf("warnings = %v", res.Warnings)
+	}
+	if _, err := os.Lstat(filepath.Join(root, "bin", "tool")); !os.IsNotExist(err) {
+		t.Errorf("the other app's link was touched: %v", err)
+	}
+	if target, err := os.Readlink(res.LinkPath); err != nil || target != res.BinPath {
+		t.Errorf("fallback link = %q, %v; want %q", target, err, res.BinPath)
+	}
+}
+
+func TestInstallExplicitLinkCollisionFails(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write(makeArchive(t, "v1"))
+	}))
+	defer srv.Close()
+	root := t.TempDir()
+	fetcher, _ := download.New("")
+	req := Request{
+		App: config.App{ID: "testghpm", Repo: "acme/tool",
+			Install: config.Install{Type: "archive", Link: "tool"}},
+		Tag:       "v1.0.0",
+		Version:   "1.0.0",
+		AssetName: "tool_1.0.0_linux_amd64.tar.gz",
+		AssetURL:  srv.URL,
+		DataDir:   filepath.Join(root, "data"),
+		BinDir:    filepath.Join(root, "bin"),
+		CacheDir:  filepath.Join(root, "cache"),
+		PruneKeep: 2,
+		ReservedLinks: map[string]string{
+			filepath.Join(root, "bin", "tool"): "tool",
+		},
+	}
+	if _, err := Install(context.Background(), fetcher, req); err == nil || !strings.Contains(err.Error(), "already used by app") {
+		t.Fatalf("want link collision error, got %v", err)
+	}
+	if _, err := os.Lstat(filepath.Join(root, "bin", "tool")); !os.IsNotExist(err) {
+		t.Errorf("a link was created despite the collision: %v", err)
+	}
+}

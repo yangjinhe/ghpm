@@ -355,6 +355,15 @@ func (s *Service) InstallOne(ctx context.Context, id string, opts InstallOptions
 
 	prior, _ := s.Store.Load()
 	var prev *state.AppState
+	reserved := map[string]string{}
+	if prior != nil {
+		for otherID, rec := range prior.Apps {
+			if otherID == id || rec.LinkPath == "" {
+				continue
+			}
+			reserved[filepath.Clean(rec.LinkPath)] = otherID
+		}
+	}
 	if rec, ok := prior.Apps[id]; ok {
 		prev = rec
 		res.Previous = rec.Version
@@ -363,25 +372,26 @@ func (s *Service) InstallOne(ctx context.Context, id string, opts InstallOptions
 	assetURL, assetHeaders := s.GH.DownloadSource(asset)
 	opts.Progress.emit(Event{Kind: "install", ID: id, Message: fmt.Sprintf("installing %s %s", app.Repo, tag)})
 	ir, err := installer.Install(ctx, s.Fetcher, installer.Request{
-		App:       *app,
-		Platform:  target,
-		Tag:       tag,
-		Version:   ver,
-		AssetName: asset.Name,
-		AssetURL:  assetURL,
-		Headers:   assetHeaders,
-		SHA256:    sha,
-		DataDir:   s.DataDir,
-		BinDir:    s.BinDir,
-		AppsDir:   s.AppsDir,
-		CacheDir:  s.CacheDir,
-		Proxy:     s.proxy(),
-		Prefix:    s.Cfg.Defaults.GitHub.DownloadPrefix,
-		UserAgent: "ghpm/" + version.String(),
-		Verify:    verify,
-		PruneKeep: s.Cfg.Defaults.PruneKeep,
-		Force:     opts.Force,
-		Progress:  func(dp download.Progress) { opts.Progress.emit(Event{Kind: "download", ID: id, Download: dp}) },
+		App:           *app,
+		Platform:      target,
+		Tag:           tag,
+		Version:       ver,
+		AssetName:     asset.Name,
+		AssetURL:      assetURL,
+		Headers:       assetHeaders,
+		SHA256:        sha,
+		DataDir:       s.DataDir,
+		BinDir:        s.BinDir,
+		AppsDir:       s.AppsDir,
+		CacheDir:      s.CacheDir,
+		ReservedLinks: reserved,
+		Proxy:         s.proxy(),
+		Prefix:        s.Cfg.Defaults.GitHub.DownloadPrefix,
+		UserAgent:     "ghpm/" + version.String(),
+		Verify:        verify,
+		PruneKeep:     s.Cfg.Defaults.PruneKeep,
+		Force:         opts.Force,
+		Progress:      func(dp download.Progress) { opts.Progress.emit(Event{Kind: "download", ID: id, Download: dp}) },
 	})
 	if err != nil {
 		res.Err = err
@@ -1006,17 +1016,25 @@ func (s *Service) Remove(id string, purge bool) ([]string, error) {
 	if app == nil && rec == nil {
 		return nil, fmt.Errorf("unknown app %q", id)
 	}
+	appDir := filepath.Join(s.DataDir, "apps", id)
 	if rec != nil && rec.LinkPath != "" {
 		if info, err := os.Lstat(rec.LinkPath); err == nil && info.Mode()&os.ModeSymlink != 0 {
-			target, _ := os.Readlink(rec.LinkPath)
-			if target == "" || strings.HasPrefix(target, s.DataDir) || strings.HasPrefix(target, s.Cfg.Defaults.DataDir) {
-				if err := os.Remove(rec.LinkPath); err == nil {
-					removed = append(removed, rec.LinkPath)
+			target, err := os.Readlink(rec.LinkPath)
+			if err == nil {
+				if !filepath.IsAbs(target) {
+					target = filepath.Join(filepath.Dir(rec.LinkPath), target)
+				}
+				// Only remove the link when it still belongs to this app.
+				// Two apps used to share a link name, and removing one
+				// deleted the other's command.
+				if withinDir(appDir, target) {
+					if err := os.Remove(rec.LinkPath); err == nil {
+						removed = append(removed, rec.LinkPath)
+					}
 				}
 			}
 		}
 	}
-	appDir := filepath.Join(s.DataDir, "apps", id)
 	if _, err := os.Stat(appDir); err == nil {
 		if err := os.RemoveAll(appDir); err != nil {
 			return removed, err
@@ -1187,6 +1205,7 @@ func (s *Service) Diagnostics() Doctor {
 	}
 	if st != nil {
 		d.Installed = len(st.Apps)
+		d.Issues = append(d.Issues, s.linkIssues(st)...)
 	}
 	if !d.BinOnPath {
 		d.Issues = append(d.Issues, fmt.Sprintf("%s is not on PATH; add it to use installed tools", s.BinDir))
@@ -1207,6 +1226,62 @@ func (s *Service) Diagnostics() Doctor {
 		d.Issues = append(d.Issues, fmt.Sprintf("GitHub rate limit exhausted until %s", d.RateLimit.Reset.Local().Format("15:04:05")))
 	}
 	return d
+}
+
+// linkIssues reports installed apps whose symlink is missing, dangling or
+// points at another app's directory, which happens after link collisions
+// created by older versions.
+func (s *Service) linkIssues(st *state.State) []string {
+	ids := make([]string, 0, len(st.Apps))
+	for id := range st.Apps {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	var issues []string
+	for _, id := range ids {
+		rec := st.Apps[id]
+		if rec == nil || rec.LinkPath == "" {
+			continue
+		}
+		appDir := filepath.Join(s.DataDir, "apps", id)
+		info, err := os.Lstat(rec.LinkPath)
+		switch {
+		case os.IsNotExist(err):
+			issues = append(issues, fmt.Sprintf("%s: link %s is missing; run `ghpm install %s`", id, rec.LinkPath, id))
+			continue
+		case err != nil:
+			issues = append(issues, fmt.Sprintf("%s: cannot inspect link %s: %v", id, rec.LinkPath, err))
+			continue
+		case info.Mode()&os.ModeSymlink == 0:
+			issues = append(issues, fmt.Sprintf("%s: %s is not a symlink managed by ghpm", id, rec.LinkPath))
+			continue
+		}
+		target, err := os.Readlink(rec.LinkPath)
+		if err != nil {
+			issues = append(issues, fmt.Sprintf("%s: cannot read link %s: %v", id, rec.LinkPath, err))
+			continue
+		}
+		if !filepath.IsAbs(target) {
+			target = filepath.Join(filepath.Dir(rec.LinkPath), target)
+		}
+		if !withinDir(appDir, target) {
+			issues = append(issues, fmt.Sprintf("%s: link %s points outside its app directory", id, rec.LinkPath))
+			continue
+		}
+		if _, err := os.Stat(target); err != nil {
+			issues = append(issues, fmt.Sprintf("%s: link %s is dangling; run `ghpm install %s`", id, rec.LinkPath, id))
+		}
+	}
+	return issues
+}
+
+// withinDir reports whether path is root or inside root.
+func withinDir(root, path string) bool {
+	rel, err := filepath.Rel(filepath.Clean(root), filepath.Clean(path))
+	if err != nil {
+		return false
+	}
+	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
 // ErrNotInstalled is returned by operations that need an installed app.

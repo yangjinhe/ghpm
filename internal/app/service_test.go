@@ -30,6 +30,7 @@ import (
 	"ghpm/internal/config"
 	"ghpm/internal/platform"
 	"ghpm/internal/signature"
+	"ghpm/internal/state"
 )
 
 func tarGz(t *testing.T, name, body string) []byte {
@@ -774,5 +775,127 @@ func TestAddSameRepoDifferentIDs(t *testing.T) {
 	}
 	if id, err := svc.ResolveID("TOOL"); err != nil || id != "tool" {
 		t.Fatalf("ResolveID(TOOL) = %q, %v", id, err)
+	}
+}
+
+func TestSameRepoAppsGetDistinctLinksAndRemoveKeepsOther(t *testing.T) {
+	f, closeSrv := newFakeGitHub(t, false)
+	defer closeSrv()
+	appA := toolApp()
+	appB := toolApp()
+	appB.ID = "tool-copy"
+	appB.Install.Link = "" // derive the link name like `ghpm add` does
+	paths, _ := testConfig(t, f.base, appA, appB)
+	svc, err := New(Options{ConfigPath: paths.ConfigFile})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	a := svc.InstallOne(ctx, "tool", InstallOptions{})
+	if a.Err != nil {
+		t.Fatalf("tool: %v", a.Err)
+	}
+	b := svc.InstallOne(ctx, "tool-copy", InstallOptions{})
+	if b.Err != nil {
+		t.Fatalf("tool-copy: %v", b.Err)
+	}
+	if filepath.Base(a.Link) != "tool" || filepath.Base(b.Link) != "tool-copy" {
+		t.Fatalf("links = %q, %q", a.Link, b.Link)
+	}
+	if len(b.Warnings) == 0 {
+		t.Errorf("second install should warn about the shared link name")
+	}
+	aTarget, err := os.Readlink(a.Link)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(aTarget, filepath.Join("apps", "tool")+string(filepath.Separator)) {
+		t.Errorf("tool link target = %q", aTarget)
+	}
+	bTarget, err := os.Readlink(b.Link)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(bTarget, filepath.Join("apps", "tool-copy")+string(filepath.Separator)) {
+		t.Errorf("tool-copy link target = %q", bTarget)
+	}
+
+	if _, err := svc.Remove("tool-copy", false); err != nil {
+		t.Fatalf("remove tool-copy: %v", err)
+	}
+	if _, err := os.Lstat(a.Link); err != nil {
+		t.Errorf("removing tool-copy deleted tool's link: %v", err)
+	}
+	if data, err := os.ReadFile(a.Link); err != nil || string(data) != "v1" {
+		t.Errorf("tool link is broken: %q %v", data, err)
+	}
+	if _, err := os.Lstat(b.Link); !os.IsNotExist(err) {
+		t.Errorf("tool-copy link still present: %v", err)
+	}
+	st, _ := svc.Store.Load()
+	if st.Apps["tool"] == nil {
+		t.Error("tool state was removed with tool-copy")
+	}
+}
+
+func TestRemoveKeepsLinkOwnedByAnotherApp(t *testing.T) {
+	paths, _ := testConfig(t, "https://api.github.com", toolApp())
+	svc, err := New(Options{ConfigPath: paths.ConfigFile})
+	if err != nil {
+		t.Fatal(err)
+	}
+	binDir := paths.BinDir
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	otherDir := filepath.Join(paths.DataDir, "apps", "tool", "1.0.0")
+	if err := os.MkdirAll(otherDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	otherBin := filepath.Join(otherDir, "tool")
+	if err := os.WriteFile(otherBin, []byte("v1"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.Store.Set(&state.AppState{ID: "tool", Repo: "acme/tool", Version: "1.0.0", LinkPath: filepath.Join(binDir, "tool")}); err != nil {
+		t.Fatal(err)
+	}
+	// A legacy record that points at another app's link path.
+	link := filepath.Join(binDir, "tool-copy")
+	if err := os.Symlink(otherBin, link); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.Store.Set(&state.AppState{ID: "tool-copy", Repo: "acme/tool", Version: "1.0.0", LinkPath: link}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.Remove("tool-copy", false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(link); err != nil {
+		t.Errorf("remove deleted a link that belongs to another app: %v", err)
+	}
+	if data, err := os.ReadFile(otherBin); err != nil || string(data) != "v1" {
+		t.Errorf("other app's binary changed: %q %v", data, err)
+	}
+}
+
+func TestDoctorReportsMissingLink(t *testing.T) {
+	paths, _ := testConfig(t, "https://api.github.com", toolApp())
+	svc, err := New(Options{ConfigPath: paths.ConfigFile})
+	if err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(paths.BinDir, "tool")
+	if err := svc.Store.Set(&state.AppState{ID: "tool", Repo: "acme/tool", Version: "1.0.0", LinkPath: link}); err != nil {
+		t.Fatal(err)
+	}
+	d := svc.Diagnostics()
+	found := false
+	for _, issue := range d.Issues {
+		if strings.Contains(issue, "link") && strings.Contains(issue, "missing") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("doctor issues = %v", d.Issues)
 	}
 }

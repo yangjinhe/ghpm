@@ -26,26 +26,29 @@ import (
 
 // Request is one installation or upgrade.
 type Request struct {
-	App        config.App
-	Platform   platform.Platform
-	Tag        string
-	Version    string
-	AssetName  string
-	AssetURL   string
-	Headers    map[string]string
-	SHA256     string
-	DataDir    string
-	BinDir     string
-	AppsDir    string
-	CacheDir   string
-	Proxy      string
-	Prefix     string
-	UserAgent  string
-	Verify     string
-	PruneKeep  int
-	Force      bool
-	Progress   func(download.Progress)
-	SudoRunner func(ctx context.Context, name string, args ...string) error
+	App       config.App
+	Platform  platform.Platform
+	Tag       string
+	Version   string
+	AssetName string
+	AssetURL  string
+	Headers   map[string]string
+	SHA256    string
+	DataDir   string
+	BinDir    string
+	AppsDir   string
+	CacheDir  string
+	// ReservedLinks maps absolute link paths to the app id that owns them.
+	// It keeps two apps from silently sharing one symlink.
+	ReservedLinks map[string]string
+	Proxy         string
+	Prefix        string
+	UserAgent     string
+	Verify        string
+	PruneKeep     int
+	Force         bool
+	Progress      func(download.Progress)
+	SudoRunner    func(ctx context.Context, name string, args ...string) error
 }
 
 // Result describes a completed install.
@@ -273,6 +276,24 @@ func Install(ctx context.Context, fetcher *download.Fetcher, req Request) (res R
 		}
 		res.Warnings = append(res.Warnings, warnings...)
 		linkPath = filepath.Join(dir, linkName)
+	}
+	if owner, ok := req.ReservedLinks[filepath.Clean(linkPath)]; ok && owner != req.App.ID {
+		if req.App.Install.Link != "" {
+			return res, fmt.Errorf("link %s is already used by app %q; set install.link to another name", linkPath, owner)
+		}
+		fallback := req.App.ID
+		if appMode && !strings.HasSuffix(strings.ToLower(fallback), ".app") {
+			fallback += ".app"
+		}
+		fallbackPath := filepath.Join(filepath.Dir(linkPath), fallback)
+		if other, ok := req.ReservedLinks[filepath.Clean(fallbackPath)]; ok && other != req.App.ID {
+			return res, fmt.Errorf("link %s is used by app %q and fallback %s by %q; set install.link",
+				linkPath, owner, fallbackPath, other)
+		}
+		res.Warnings = append(res.Warnings, fmt.Sprintf(
+			"link %s is used by app %q; linking %s as %s", linkPath, owner, req.App.ID, fallbackPath))
+		linkName = fallback
+		linkPath = fallbackPath
 	}
 	if err := makeSymlink(linkPath, binAbs, req.Force); err != nil {
 		return res, err

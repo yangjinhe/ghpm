@@ -1,6 +1,6 @@
 BINARY  ?= ghpm
 GUI_BINARY ?= ghpm-gui
-VERSION ?= 0.5.0-dev
+VERSION ?= 0.5.1-dev
 COMMIT  ?= $(shell git rev-parse --short HEAD 2>/dev/null)
 LDFLAGS  = -s -w -X ghpm/internal/version.Version=$(VERSION)
 ifneq ($(COMMIT),)
