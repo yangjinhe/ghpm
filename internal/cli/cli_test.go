@@ -292,7 +292,7 @@ func TestAddAmbiguousAssets(t *testing.T) {
 func TestAddSameRepoDifferentIDs(t *testing.T) {
 	_, cfg, closer := newCLIEnv(t)
 	defer closer()
-	if out, err := runCLI(t, "-c", cfg, "add", "acme/tool", "--id", "tool-gui"); err != nil {
+	if out, err := runCLI(t, "-c", cfg, "add", "acme/tool", "--id", "tool-gui", "--os", "linux", "--arch", "amd64"); err != nil {
 		t.Fatalf("second id: %v\n%s", err, out)
 	}
 	out, err := runCLI(t, "-c", cfg, "list", "--json")
