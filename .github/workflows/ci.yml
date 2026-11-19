@@ -34,3 +34,26 @@ jobs:
       - run: go vet ./...
       - run: go test ./...
       - run: go test -race ./internal/state ./internal/app ./internal/web ./internal/cli
+
+  gui:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: gui
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.27.3"
+          cache: true
+          cache-dependency-path: gui/go.sum
+      - run: gofmt -l . | tee /tmp/fmt.txt && test ! -s /tmp/fmt.txt
+      - run: go vet ./...
+      - run: go test ./...
+      - name: Cross-compile native UI
+        run: |
+          set -eu
+          for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64; do
+            GOOS="${target%/*}" GOARCH="${target#*/}" CGO_ENABLED=0 go build ./...
+            echo "built ${target}"
+          done

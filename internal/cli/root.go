@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
 
 	"ghpm/internal/app"
 	"ghpm/internal/platform"
@@ -129,11 +130,7 @@ func confirm(prompt string) bool {
 }
 
 func isTTY(f *os.File) bool {
-	info, err := f.Stat()
-	if err != nil {
-		return false
-	}
-	return info.Mode()&os.ModeCharDevice != 0
+	return term.IsTerminal(int(f.Fd()))
 }
 
 func humanBytes(n float64) string {

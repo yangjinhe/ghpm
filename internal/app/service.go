@@ -154,6 +154,23 @@ type AddOptions struct {
 	Progress   ProgressFunc
 }
 
+// AssetChoiceError reports that several release assets match the target
+// platform. Retry Add with AddOptions.Asset set to one of the candidates.
+type AssetChoiceError struct {
+	Repo       string
+	Tag        string
+	Candidates []resolver.Candidate
+}
+
+func (e *AssetChoiceError) Error() string {
+	names := make([]string, 0, len(e.Candidates))
+	for _, c := range e.Candidates {
+		names = append(names, c.Name)
+	}
+	return fmt.Sprintf("%s %s: several assets match this platform (%s); choose one with --asset",
+		e.Repo, e.Tag, strings.Join(names, ", "))
+}
+
 // AddResult reports what was configured.
 type AddResult struct {
 	App       config.App
@@ -180,11 +197,6 @@ func (s *Service) Add(ctx context.Context, opts AddOptions) (*AddResult, error) 
 	if s.Cfg.AppByID(id) != nil {
 		return nil, fmt.Errorf("app %q is already configured (edit %s or use --id)", id, s.Cfg.Path)
 	}
-	for _, a := range s.Cfg.Apps {
-		if strings.EqualFold(a.Repo, repo) {
-			return nil, fmt.Errorf("%s is already configured as %q", repo, a.ID)
-		}
-	}
 	channel := strings.TrimSpace(opts.Channel)
 	if channel == "" {
 		if opts.Prerelease || s.Cfg.Prerelease() {
@@ -207,6 +219,17 @@ func (s *Service) Add(ctx context.Context, opts AddOptions) (*AddResult, error) 
 		target = platform.Current()
 	}
 	gen, err := resolver.Generate(rel.AssetNames(), target, tag, ver, opts.Asset, s.Cfg.Defaults.Prefer)
+	if errors.Is(err, resolver.ErrAmbiguous) {
+		// Re-run the ranking to show every matching asset, not just the top
+		// two from the error string.
+		_, ranked, _ := resolver.Best(rel.AssetNames(), target, resolver.Options{Prefer: s.Cfg.Defaults.Prefer})
+		if len(ranked) > 12 {
+			ranked = ranked[:12]
+		}
+		if len(ranked) > 1 {
+			return nil, &AssetChoiceError{Repo: repo, Tag: tag, Candidates: ranked}
+		}
+	}
 	if err != nil {
 		return nil, fmt.Errorf("%s %s: %w (assets: %s)", repo, tag, err, strings.Join(rel.AssetNames(), ", "))
 	}
@@ -771,16 +794,36 @@ func (s *Service) ResolveID(input string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("app %q is not configured", input)
 	}
+	var configMatches []string
 	for _, a := range s.Cfg.Apps {
 		if strings.EqualFold(a.Repo, repo) {
-			return a.ID, nil
+			configMatches = append(configMatches, a.ID)
 		}
 	}
+	sort.Strings(configMatches)
+	switch len(configMatches) {
+	case 1:
+		return configMatches[0], nil
+	case 0:
+	default:
+		return "", fmt.Errorf("repository %q is configured as multiple apps (%s); use the app id",
+			repo, strings.Join(configMatches, ", "))
+	}
 	if st, loadErr := s.Store.Load(); loadErr == nil && st != nil {
+		var stateMatches []string
 		for id, rec := range st.Apps {
 			if strings.EqualFold(rec.Repo, repo) {
-				return id, nil
+				stateMatches = append(stateMatches, id)
 			}
+		}
+		sort.Strings(stateMatches)
+		switch len(stateMatches) {
+		case 1:
+			return stateMatches[0], nil
+		case 0:
+		default:
+			return "", fmt.Errorf("repository %q is installed as multiple apps (%s); use the app id",
+				repo, strings.Join(stateMatches, ", "))
 		}
 	}
 	return "", fmt.Errorf("no app configured for %q; run `ghpm add %s` first", repo, repo)

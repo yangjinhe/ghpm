@@ -101,6 +101,7 @@ tar -xzf "ghpm_<version>_darwin_arm64.tar.gz" && "./ghpm_<version>_darwin_arm64/
 # 交互界面
 ./ghpm tui
 ./ghpm web --open        # http://127.0.0.1:8787
+./ghpm-gui               # 原生桌面界面（make gui）
 ```
 
 > 如果 `~/.local/bin` 不在 `PATH` 里，`ghpm doctor` 会提示；把它加进
@@ -178,6 +179,10 @@ ghpm remove https://github.com/Minireel/HGhub
 
 注意：`remove` 默认保留配置项（方便重装），需要连配置一起删时加 `--purge`。
 
+同一仓库可以配置多个应用（使用不同的 `--id`），例如 CLI 与 GUI。自动选择
+遇到多个同分候选时，终端下 `ghpm add` 会列出候选并提示选择；非交互环境
+会报错并提示用 `--asset` 指定。
+
 安装/更新相关：`--os`、`--arch`（交叉准备配置）、`--tag`（指定版本）、
 `--force`（覆盖非 ghpm 管理的同名文件）。
 
@@ -199,6 +204,32 @@ ghpm web --listen 127.0.0.1:9000
 ```
 
 界面资源内嵌在二进制里，不需要 Node.js 或前端构建步骤。
+
+## 原生桌面界面（实验）
+
+`gui/` 提供了一个 MyGo 原生 UI 前端（纯 Go、无 cgo、无 WebView），与
+CLI/TUI/Web 共用 `internal/app` 和 SQLite 状态：
+
+```bash
+make gui        # 需要 Go 1.27.3+，go.mod 会自动选择工具链
+./ghpm-gui
+```
+
+功能包括：应用表格与筛选、检查更新、全部更新、添加、安装/升级、固定、
+回滚、详情、卸载（可选删除配置）、实时进度面板、原生菜单、桌面通知和
+单实例。Linux 上使用 OpenGL/CPU 绘制，不依赖 WebKitGTK。
+
+GUI 使用独立的 release 通道：tag 形如 `v0.5.0-gui`，发布时标记
+`make_latest=false`，所以不会占用 CLI 的 `latest`，也不会和 CLI 资产混在
+同一个 release 里。安装：
+
+```bash
+ghpm add yangjinhe/ghpm --channel tag:v0.5.0-gui --id ghpm-gui --install
+```
+
+macOS 发布 universal dmg（安装为 `/Applications/ghpm-gui.app`），Linux 发布
+tar.gz 与 deb。频道固定为 GUI tag，`ghpm check` 不会自动发现新的 GUI 版本，
+升级时指定新 tag。细节与打包方式见 [`gui/README.md`](gui/README.md)。
 
 ## 配置文件
 
@@ -425,6 +456,8 @@ ghpm completion bash > ~/.local/share/bash-completion/completions/ghpm
   需手工安装。ghpm 自身未做 Apple 代码签名/公证。
 - Windows 的安装路径与包类型未做专门适配（核心逻辑可复用）。
 - Web 界面面向本机单人使用，没有内置账号体系。
+- 原生桌面界面（`ghpm-gui`）仍是实验性质，通过独立的 `vX-gui` release
+  分发；签名与公证流程待接入。
 
 ## 持续集成与发布
 
@@ -464,6 +497,7 @@ internal/archive    安全解包、可执行文件定位
 internal/installer  原子安装、软链、版本清理
 internal/signature  minisign / GPG 分离签名校验
 internal/state      state.db（SQLite）+ 旧 state.json 自动迁移
+gui                 MyGo 原生桌面界面（独立 Go 1.27.3 模块）
 ```
 
 设计原则：平台识别与资产选择是纯函数，便于表驱动测试；网络、文件系统

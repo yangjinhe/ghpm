@@ -1,5 +1,27 @@
 # Changelog
 
+## v0.5.0 (2026-11-19)
+
+### 新增
+
+- **原生桌面界面 `ghpm-gui`**：基于 MyGo 原生 UI（纯 Go、无 cgo、无
+  WebView），复用 `internal/app` 与 SQLite 状态。提供应用表格/筛选、
+  检查更新、全部更新、添加、安装/升级、pin、回滚、详情、卸载（保留或删除
+  配置）、实时进度、原生菜单、桌面通知和单实例。独立 `gui/` 模块使用 Go
+  1.27.3，核心仍保持 Go 1.25；界面可在内存中无窗口测试，CI 交叉编译
+  Linux/macOS 目标。
+
+- **GUI 独立发布通道**：`vX-gui` tag 触发独立的 GUI release，
+  `make_latest=false`，不占用 CLI 的 latest，也不与 CLI 资产混在一个
+  release 中；macOS 发布 dmg，Linux 发布 tar.gz/deb。
+
+### 修复
+
+- **`ghpm add` 多候选选择**：多个资产同分时，终端下列出候选并交互选择；
+  非交互环境报错并给出 `--asset` 与候选名。
+- **同一仓库多应用**：允许用不同 `--id` 从同一仓库添加多个条目（如 CLI 与
+  GUI）；按 `owner/repo` 解析到多个应用时提示改用 app id。
+
 ## v0.4.0 (2026-11-18)
 
 ### 变更

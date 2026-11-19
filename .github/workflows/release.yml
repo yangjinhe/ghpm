@@ -9,6 +9,7 @@ permissions:
 
 jobs:
   build:
+    if: ${{ !endsWith(github.ref_name, '-gui') }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -96,6 +97,7 @@ jobs:
 
   publish:
     needs: build
+    if: ${{ !endsWith(github.ref_name, '-gui') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -139,4 +141,121 @@ jobs:
             dist/*.tar.gz.sha256
             dist/*.deb
             dist/*.deb.sha256
+          fail_on_unmatched_files: true
+
+  gui-darwin:
+    if: ${{ endsWith(github.ref_name, '-gui') }}
+    runs-on: macos-latest
+    defaults:
+      run:
+        working-directory: gui
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.27.3"
+          cache: true
+          cache-dependency-path: gui/go.sum
+      - name: Build macOS app and dmg
+        run: |
+          set -eu
+          version="${GITHUB_REF_NAME%-gui}"
+          version="${version#v}"
+          python3 - "$version" <<'PY'
+          import json, sys
+          path = "mygo.json"
+          with open(path) as f:
+              config = json.load(f)
+          config["version"] = sys.argv[1]
+          with open(path, "w") as f:
+              json.dump(config, f, indent=2)
+              f.write("\n")
+          PY
+          go run github.com/egoist/mygo/cmd/mygo@v0.10.0 build \
+            -platform darwin/universal -skip-notarize -skip-installer
+          mkdir -p ../dist/gui
+          find build -type f -name '*.dmg' -exec cp {} ../dist/gui/ \;
+          ls -lh ../dist/gui
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ghpm-gui-darwin
+          path: dist/gui/*
+          if-no-files-found: error
+
+  gui-linux:
+    if: ${{ endsWith(github.ref_name, '-gui') }}
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: gui
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.27.3"
+          cache: true
+          cache-dependency-path: gui/go.sum
+      - name: Build Linux archives and packages
+        run: |
+          set -eu
+          version="${GITHUB_REF_NAME%-gui}"
+          version="${version#v}"
+          python3 - "$version" <<'PY'
+          import json, sys
+          path = "mygo.json"
+          with open(path) as f:
+              config = json.load(f)
+          config["version"] = sys.argv[1]
+          with open(path, "w") as f:
+              json.dump(config, f, indent=2)
+              f.write("\n")
+          PY
+          go run github.com/egoist/mygo/cmd/mygo@v0.10.0 build \
+            -platform linux/amd64,linux/arm64 -skip-notarize -skip-installer
+          mkdir -p ../dist/gui
+          find build -type f \( -name '*.tar.gz' -o -name '*.deb' \) -exec cp {} ../dist/gui/ \;
+          ls -lh ../dist/gui
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ghpm-gui-linux
+          path: dist/gui/*
+          if-no-files-found: error
+
+  gui-publish:
+    needs: [gui-darwin, gui-linux]
+    if: ${{ endsWith(github.ref_name, '-gui') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist/gui
+          merge-multiple: true
+      - name: Compose GUI release notes
+        run: |
+          set -eu
+          notes="release-notes.md"
+          awk -v tag="$GITHUB_REF_NAME" '
+            /^## / {
+              if (capture) exit
+              if ($2 == tag) capture = 1
+              next
+            }
+            capture { print }
+          ' gui/CHANGELOG.md > "$notes"
+          sed -i '/./,$!d' "$notes"
+          if [ ! -s "$notes" ]; then
+            printf 'ghpm-gui %s\n' "$GITHUB_REF_NAME" > "$notes"
+          fi
+          printf '\n## 安装\n\n```bash\nghpm add yangjinhe/ghpm --channel tag:%s --id ghpm-gui --install\n```\n\n也可以直接下载下方的 dmg / tar.gz。\n' "$GITHUB_REF_NAME" >> "$notes"
+          ( cd dist/gui && sha256sum * > SHA256SUMS )
+          echo '--- notes ---'
+          cat "$notes"
+      - name: Publish GUI release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "ghpm-gui ${{ github.ref_name }}"
+          body_path: release-notes.md
+          files: dist/gui/*
+          make_latest: "false"
           fail_on_unmatched_files: true

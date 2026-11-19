@@ -1,0 +1,11 @@
+{
+  "name": "ghpm-gui",
+  "identifier": "io.github.yangjinhe.ghpm.gui",
+  "version": "0.5.0",
+  "out": "build",
+  "linux": {
+    "webview": false,
+    "formats": ["deb"],
+    "maintainer": "yangjinhe"
+  }
+}

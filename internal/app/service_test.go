@@ -12,6 +12,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -708,5 +709,70 @@ func TestResolveAppIdentifier(t *testing.T) {
 	}
 	if _, err := svc.ResolveID("nope"); err == nil {
 		t.Error("unknown id should fail")
+	}
+}
+
+func TestAddAmbiguousAssetsSuggestsAsset(t *testing.T) {
+	f, closeSrv := newFakeGitHub(t, true) // tool + bad assets, same platform
+	defer closeSrv()
+	paths, _ := testConfig(t, f.base)
+	svc, err := New(Options{ConfigPath: paths.ConfigFile})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = svc.Add(context.Background(), AddOptions{Input: "acme/tool"})
+	var choice *AssetChoiceError
+	if !errors.As(err, &choice) {
+		t.Fatalf("want AssetChoiceError, got %v", err)
+	}
+	if len(choice.Candidates) < 2 {
+		t.Fatalf("candidates = %+v", choice.Candidates)
+	}
+	msg := err.Error()
+	for _, want := range []string{"--asset", toolAsset("1.0.0"), badAsset()} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("error %q is missing %q", msg, want)
+		}
+	}
+
+	// Retrying with --asset (AddOptions.Asset) resolves the choice.
+	res, err := svc.Add(context.Background(), AddOptions{
+		Input: "acme/tool", ID: "bad", Asset: badAsset(),
+	})
+	if err != nil {
+		t.Fatalf("explicit asset: %v", err)
+	}
+	if res.App.ID != "bad" || res.Chosen.Name != badAsset() {
+		t.Errorf("result = %+v, chosen %+v", res.App, res.Chosen)
+	}
+}
+
+func TestAddSameRepoDifferentIDs(t *testing.T) {
+	f, closeSrv := newFakeGitHub(t, false)
+	defer closeSrv()
+	paths, _ := testConfig(t, f.base)
+	svc, err := New(Options{ConfigPath: paths.ConfigFile})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	if _, err := svc.Add(ctx, AddOptions{Input: "acme/tool"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.Add(ctx, AddOptions{Input: "acme/tool", ID: "tool-gui"}); err != nil {
+		t.Fatalf("same repo with another id: %v", err)
+	}
+	if len(svc.Cfg.Apps) != 2 {
+		t.Fatalf("apps = %+v", svc.Cfg.Apps)
+	}
+	if _, err := svc.ResolveID("acme/tool"); err == nil || !strings.Contains(err.Error(), "multiple apps") {
+		t.Fatalf("repo resolution should be ambiguous, got %v", err)
+	}
+	id, err := svc.ResolveID("tool-gui")
+	if err != nil || id != "tool-gui" {
+		t.Fatalf("ResolveID(tool-gui) = %q, %v", id, err)
+	}
+	if id, err := svc.ResolveID("TOOL"); err != nil || id != "tool" {
+		t.Fatalf("ResolveID(TOOL) = %q, %v", id, err)
 	}
 }

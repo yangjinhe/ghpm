@@ -1,5 +1,8 @@
 # build output
 /ghpm
+/ghpm-gui
+/gui/build/
+/gui/gui
 /ghpm.exe
 /dist/
 *.test

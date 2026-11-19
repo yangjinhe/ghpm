@@ -19,11 +19,12 @@ import (
 )
 
 type cliGitHub struct {
-	mu      sync.Mutex
-	tag     string
-	version string
-	files   map[string][]byte
-	base    string
+	mu        sync.Mutex
+	tag       string
+	version   string
+	files     map[string][]byte
+	base      string
+	extraName string
 }
 
 func (f *cliGitHub) setVersion(tag, version, content string) {
@@ -38,14 +39,30 @@ func (f *cliGitHub) release() map[string]any {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	name := fmt.Sprintf("tool_%s_linux_amd64.tar.gz", f.version)
+	assets := []map[string]any{{
+		"id": 1, "name": name, "size": len(f.files[name]),
+		"browser_download_url": f.base + "/download/" + name,
+		"url":                  f.base + "/assets/" + name,
+	}}
+	if f.extraName != "" {
+		extra := f.extraName
+		assets = append(assets, map[string]any{
+			"id": 2, "name": extra, "size": len(f.files[extra]),
+			"browser_download_url": f.base + "/download/" + extra,
+			"url":                  f.base + "/assets/" + extra,
+		})
+	}
 	return map[string]any{
 		"tag_name": f.tag, "name": f.tag, "draft": false, "prerelease": false,
-		"assets": []map[string]any{{
-			"id": 1, "name": name, "size": len(f.files[name]),
-			"browser_download_url": f.base + "/download/" + name,
-			"url":                  f.base + "/assets/" + name,
-		}},
+		"assets": assets,
 	}
+}
+
+func (f *cliGitHub) addExtra(name, content string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.files[name] = tarGzCLI("tool-gui", content)
+	f.extraName = name
 }
 
 func (f *cliGitHub) file(name string) ([]byte, bool) {
@@ -244,5 +261,49 @@ func TestCLIErrors(t *testing.T) {
 	out, err = runCLI(t, "-c", cfg, "install", "tool", "--arch", "sparc")
 	if err == nil {
 		t.Errorf("invalid architecture should fail, out = %s", out)
+	}
+}
+
+func TestAddAmbiguousAssets(t *testing.T) {
+	gh, cfg, closer := newCLIEnv(t)
+	defer closer()
+	extra := "tool-gui_1.0.0_linux_amd64.tar.gz"
+	gh.addExtra(extra, "gui")
+
+	out, err := runCLI(t, "-c", cfg, "add", "acme/tool", "--id", "dual", "--os", "linux", "--arch", "amd64")
+	if err == nil {
+		t.Fatalf("ambiguous add should fail: %s", out)
+	}
+	for _, want := range []string{"--asset", "tool_1.0.0_linux_amd64.tar.gz", extra} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q is missing %q", err, want)
+		}
+	}
+
+	out, err = runCLI(t, "-c", cfg, "add", "acme/tool", "--id", "dual", "--asset", extra, "--os", "linux", "--arch", "amd64")
+	if err != nil {
+		t.Fatalf("add with --asset: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, extra) {
+		t.Errorf("output does not mention the chosen asset: %s", out)
+	}
+}
+
+func TestAddSameRepoDifferentIDs(t *testing.T) {
+	_, cfg, closer := newCLIEnv(t)
+	defer closer()
+	if out, err := runCLI(t, "-c", cfg, "add", "acme/tool", "--id", "tool-gui"); err != nil {
+		t.Fatalf("second id: %v\n%s", err, out)
+	}
+	out, err := runCLI(t, "-c", cfg, "list", "--json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var rows []listRow
+	if err := json.Unmarshal([]byte(out), &rows); err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("rows = %+v", rows)
 	}
 }

@@ -1,7 +1,10 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
+	"os"
+	"strconv"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -42,7 +45,7 @@ Examples:
 			}
 			pf := newProgressPrinter()
 			defer pf.Stop()
-			res, err := svc.Add(cmd.Context(), app.AddOptions{
+			opts := app.AddOptions{
 				Input:      args[0],
 				ID:         id,
 				Platform:   p,
@@ -51,7 +54,18 @@ Examples:
 				Prerelease: prerelease,
 				Install:    installNow,
 				Progress:   pf.Event,
-			})
+			}
+			res, err := svc.Add(cmd.Context(), opts)
+			var choice *app.AssetChoiceError
+			if errors.As(err, &choice) && isTTY(os.Stdin) {
+				picked, pickErr := promptAsset(choice)
+				if pickErr != nil {
+					return pickErr
+				}
+				opts.Asset = picked
+				fmt.Fprintf(cmd.ErrOrStderr(), "Using asset %s\n", picked)
+				res, err = svc.Add(cmd.Context(), opts)
+			}
 			if err != nil {
 				return err
 			}
@@ -100,4 +114,30 @@ func installDescription(a config.App) string {
 		desc += " (bin " + a.Install.Bin + ")"
 	}
 	return desc
+}
+
+// promptAsset asks the user to choose among the assets that matched. It is
+// only used on a terminal; scripts get the error and its --asset hint.
+func promptAsset(choice *app.AssetChoiceError) (string, error) {
+	fmt.Fprintf(os.Stderr, "%s %s: several assets match this platform:\n", choice.Repo, choice.Tag)
+	for i, c := range choice.Candidates {
+		fmt.Fprintf(os.Stderr, "  %2d) %-64s %-8s score %d\n", i+1, c.Name, c.Format, c.Score)
+	}
+	for {
+		fmt.Fprint(os.Stderr, "Choose an asset (number or name): ")
+		var answer string
+		if _, err := fmt.Fscanln(os.Stdin, &answer); err != nil {
+			return "", choice
+		}
+		answer = strings.TrimSpace(answer)
+		if n, err := strconv.Atoi(answer); err == nil && n >= 1 && n <= len(choice.Candidates) {
+			return choice.Candidates[n-1].Name, nil
+		}
+		for _, c := range choice.Candidates {
+			if strings.EqualFold(c.Name, answer) {
+				return c.Name, nil
+			}
+		}
+		fmt.Fprintln(os.Stderr, "Enter a listed number or asset name.")
+	}
 }
